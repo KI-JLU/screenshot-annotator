@@ -138,6 +138,8 @@ export interface ProcessResponse {
 // POST   /v1/comments/:commentId/retry                    -> Comment (only missing steps)
 // POST   /v1/comments/:commentId/reconcile ReconcileRequest -> Comment
 export interface CreateCommentRequest {
+  /** Idempotency key (UUID per capture). A retried POST with the same id returns the existing comment. */
+  clientRequestId?: string;
   text: string;
   markKind: MarkKind;
   context: CaptureContext;

@@ -4,8 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "vite build",
-    "typecheck": "tsc -p tsconfig.json"
+    "build": "vite build && vite build -c vite.content.config.ts && node scripts/check-dist.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
     "@website-review/shared": "0.1.0",
