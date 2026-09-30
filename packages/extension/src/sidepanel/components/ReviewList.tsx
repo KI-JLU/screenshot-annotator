@@ -8,8 +8,9 @@ import { useAction, useApp } from "../context.ts";
 import { confirmDialog } from "./ConfirmDialog.tsx";
 import { ErrorText, Field } from "./ui.tsx";
 
+/** "Entwurf: 2 · Veröffentlicht: 1" – label first, so the state names need no plural forms. */
 export function countsText(counts: Partial<Record<CommentState, number>>): string {
-  const parts = COMMENT_STATES.filter((s) => (counts[s] ?? 0) > 0).map((s) => `${counts[s]} ${COMMENT_STATE_LABELS[s]}`);
+  const parts = COMMENT_STATES.filter((s) => (counts[s] ?? 0) > 0).map((s) => `${COMMENT_STATE_LABELS[s]}: ${counts[s]}`);
   return parts.length ? parts.join(" · ") : "Keine Kommentare";
 }
 
