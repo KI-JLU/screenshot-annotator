@@ -634,3 +634,9 @@ details[open] > summary {
   flex-direction: column;
   gap: 10px;
 }
+
+.command {
+  display: inline-block;
+  padding: 3px 6px;
+  user-select: all;
+}

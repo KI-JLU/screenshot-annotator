@@ -1,26 +1,27 @@
 /**
- * Typed client for the companion HTTP API (packages/shared/src/api.ts).
- * All routes except /v1/pair and /v1/health send `Authorization: Bearer <token>`; the browser adds
- * the chrome-extension:// Origin header itself.
+ * Typed client for the companion API (packages/shared/src/api.ts). Transport: Chrome Native
+ * Messaging through the background worker (panelConnection.ts); responses carry HTTP-style status
+ * codes, errors an ApiError body.
  */
-import { API_PREFIX, DEFAULT_COMPANION_PORT } from "@website-review/shared";
+import { API_PREFIX } from "@website-review/shared";
 import type {
   AnswerRequest,
   ApiError,
   ApiErrorCode,
   Comment,
-  CompanionEvent,
   CreateCommentRequest,
   CreateReviewRequest,
   DecisionInput,
   HealthResponse,
+  ImageResponse,
   ImportProjectRequest,
   KanBoard,
   KanCredentialStatus,
   KanList,
   KanWorkspace,
   MatchResponse,
-  PairResponse,
+  NativeMethod,
+  NativeResponse,
   PreflightProblem,
   ProcessResponse,
   ProjectConfig,
@@ -32,17 +33,15 @@ import type {
   StatusResponse,
   UpdateCommentRequest,
 } from "@website-review/shared";
-import { SseParser, toCompanionEvent } from "./sse.ts";
+import type { Transport } from "./panelConnection.ts";
 
-export const DEFAULT_BASE_URL = `http://127.0.0.1:${DEFAULT_COMPANION_PORT}`;
-
-export interface CompanionSettings {
-  baseUrl: string;
-  token?: string;
-}
-
-/** Client-side codes in addition to the server's ApiErrorCode. */
-export type ClientErrorCode = ApiErrorCode | "network" | "timeout" | "bad_response";
+/**
+ * Client-side codes in addition to the server's ApiErrorCode:
+ * - unavailable: host not installed/crashed/not ready (incl. 503 while another profile runs it)
+ * - timeout: no answer in time
+ * - bad_response: malformed answer
+ */
+export type ClientErrorCode = ApiErrorCode | "unavailable" | "timeout" | "bad_response";
 
 export class CompanionError extends Error {
   readonly status: number;
@@ -57,14 +56,9 @@ export class CompanionError extends Error {
     this.details = details;
   }
 
-  /** The companion is not reachable at all (not running, wrong URL). */
+  /** The companion cannot serve right now (see the host status for why). */
   get unreachable(): boolean {
-    return this.code === "network" || this.code === "timeout";
-  }
-
-  /** Token rejected or extension not the paired one: re-pairing is required. */
-  get authProblem(): boolean {
-    return this.code === "unauthorized" || this.code === "forbidden_origin";
+    return this.code === "unavailable" || this.code === "timeout";
   }
 }
 
@@ -86,13 +80,10 @@ export function preflightProblems(e: unknown): PreflightProblem[] | null {
 export function errorText(e: unknown): string {
   if (isCompanionError(e)) {
     switch (e.code) {
-      case "network":
-        return "Begleitdienst nicht erreichbar. Läuft „website-review-companion serve“?";
+      case "unavailable":
+        return e.status === 503 ? `Begleitdienst nicht bereit: ${e.message}` : e.message;
       case "timeout":
         return "Zeitüberschreitung bei der Anfrage an den Begleitdienst.";
-      case "unauthorized":
-      case "forbidden_origin":
-        return `Kopplung ungültig – bitte die Extension neu koppeln. (${e.message})`;
       case "bad_response":
         return `Unerwartete Antwort des Begleitdienstes: ${e.message}`;
       default:
@@ -105,15 +96,12 @@ export function errorText(e: unknown): string {
 
 const STATUS_CODES: Record<number, ApiErrorCode> = {
   400: "validation",
-  401: "unauthorized",
-  403: "forbidden_origin",
   404: "not_found",
   409: "conflict",
   422: "validation",
 };
 
 interface RequestOptions {
-  auth?: boolean;
   query?: Record<string, string>;
   timeoutMs?: number;
 }
@@ -121,68 +109,20 @@ interface RequestOptions {
 const enc = encodeURIComponent;
 
 export class CompanionClient {
-  readonly baseUrl: string;
-  private readonly token: string | undefined;
   private readonly images = new Map<string, Promise<string>>();
 
-  constructor(settings: CompanionSettings) {
-    this.baseUrl = normalizeBaseUrl(settings.baseUrl);
-    this.token = settings.token;
-  }
+  constructor(private readonly transport: Transport) {}
 
-  get paired(): boolean {
-    return !!this.token;
-  }
-
-  private url(path: string, query?: Record<string, string>): string {
-    const qs = query ? `?${new URLSearchParams(query).toString()}` : "";
-    return `${this.baseUrl}${API_PREFIX}${path}${qs}`;
-  }
-
-  private headers(auth: boolean, json: boolean): Record<string, string> {
-    const h: Record<string, string> = { Accept: "application/json" };
-    if (json) h["Content-Type"] = "application/json";
-    if (auth && this.token) h.Authorization = `Bearer ${this.token}`;
-    return h;
-  }
-
-  private async fetchRaw(method: string, path: string, body: unknown, opts: RequestOptions): Promise<Response> {
-    const auth = opts.auth ?? true;
-    let res: Response;
-    try {
-      res = await fetch(this.url(path, opts.query), {
-        method,
-        headers: this.headers(auth, body !== undefined),
-        body: body === undefined ? undefined : JSON.stringify(body),
-        cache: "no-store",
-        signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
-      });
-    } catch (e) {
-      const timeout = e instanceof DOMException && e.name === "TimeoutError";
-      throw new CompanionError(0, timeout ? "timeout" : "network", e instanceof Error ? e.message : String(e));
-    }
-    if (!res.ok) throw await toError(res);
-    return res;
-  }
-
-  private async request<T>(method: string, path: string, body?: unknown, opts: RequestOptions = {}): Promise<T> {
-    const res = await this.fetchRaw(method, path, body, opts);
-    if (res.status === 204) return undefined as T;
-    const text = await res.text();
-    if (!text) return undefined as T;
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      throw new CompanionError(res.status, "bad_response", "Antwort ist kein JSON");
-    }
+  private async request<T>(method: NativeMethod, path: string, body?: unknown, opts: RequestOptions = {}): Promise<T> {
+    const qs = opts.query ? `?${new URLSearchParams(opts.query).toString()}` : "";
+    const res = await this.transport.request(method, `${API_PREFIX}${path}${qs}`, body, opts.timeoutMs ?? 30_000);
+    if (res.status >= 400) throw toError(res);
+    return res.body as T;
   }
 
   // ---------- Connection ----------
   health(): Promise<HealthResponse> {
-    return this.request("GET", "/health", undefined, { auth: false, timeoutMs: 5_000 });
-  }
-  pair(code: string): Promise<PairResponse> {
-    return this.request("POST", "/pair", { code }, { auth: false });
+    return this.request("GET", "/health", undefined, { timeoutMs: 5_000 });
   }
   status(): Promise<StatusResponse> {
     return this.request("GET", "/status", undefined, { timeoutMs: 10_000 });
@@ -274,14 +214,15 @@ export class CompanionClient {
     return this.request("POST", `/comments/${enc(commentId)}/reconcile`, req, { timeoutMs: 60_000 });
   }
 
-  /** GET /v1/comments/:id/image as blob: URL (cached per comment revision). */
+  /** GET /v1/comments/:id/image ({ pngBase64 }) as blob: URL, cached per comment revision. */
   commentImageUrl(commentId: string, revision: number): Promise<string> {
     const key = `${commentId}@${revision}`;
     let p = this.images.get(key);
     if (!p) {
-      p = this.fetchRaw("GET", `/comments/${enc(commentId)}/image`, undefined, { timeoutMs: 30_000 })
-        .then((res) => res.blob())
-        .then((blob) => URL.createObjectURL(blob));
+      p = this.request<ImageResponse>("GET", `/comments/${enc(commentId)}/image`).then((img) => {
+        if (!img || typeof img.pngBase64 !== "string") throw new CompanionError(200, "bad_response", "Bild fehlt in der Antwort");
+        return URL.createObjectURL(base64ToBlob(img.pngBase64, "image/png"));
+      });
       p.catch(() => this.images.delete(key));
       this.images.set(key, p);
     }
@@ -293,105 +234,20 @@ export class CompanionClient {
     for (const p of this.images.values()) p.then((u) => URL.revokeObjectURL(u), () => undefined);
     this.images.clear();
   }
-
-  /**
-   * GET /v1/events via fetch streaming (EventSource cannot send Authorization headers).
-   * Reconnects with exponential backoff; returns a function that stops the subscription.
-   */
-  subscribeEvents(handlers: {
-    onEvent: (e: CompanionEvent) => void;
-    onOpen?: () => void;
-    onError?: (e: CompanionError) => void;
-  }): () => void {
-    const controller = new AbortController();
-    const { signal } = controller;
-    let delay = 1_000;
-    const IDLE_MS = 90_000;
-
-    const run = async () => {
-      while (!signal.aborted) {
-        const attempt = new AbortController();
-        const abortAttempt = () => attempt.abort();
-        signal.addEventListener("abort", abortAttempt, { once: true });
-        let idle: ReturnType<typeof setTimeout> | undefined;
-        const armIdle = () => {
-          clearTimeout(idle);
-          idle = setTimeout(() => attempt.abort(), IDLE_MS);
-        };
-        try {
-          let res: Response;
-          try {
-            res = await fetch(this.url("/events"), {
-              headers: { ...this.headers(true, false), Accept: "text/event-stream" },
-              cache: "no-store",
-              signal: attempt.signal,
-            });
-          } catch (e) {
-            throw new CompanionError(0, "network", e instanceof Error ? e.message : String(e));
-          }
-          if (!res.ok) throw await toError(res);
-          if (!res.body) throw new CompanionError(res.status, "bad_response", "Kein Ereignisstrom");
-          delay = 1_000;
-          handlers.onOpen?.();
-          armIdle();
-          const parser = new SseParser();
-          const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-          for (;;) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            armIdle();
-            for (const msg of parser.push(value)) {
-              const ev = toCompanionEvent(msg);
-              if (ev) handlers.onEvent(ev);
-            }
-          }
-          if (!signal.aborted) throw new CompanionError(0, "network", "Ereignisstrom beendet");
-        } catch (e) {
-          if (signal.aborted) return;
-          const err = isCompanionError(e) ? e : new CompanionError(0, "network", e instanceof Error ? e.message : String(e));
-          handlers.onError?.(err);
-          // Auth problems will not heal by retrying quickly.
-          if (err.authProblem) delay = 30_000;
-        } finally {
-          clearTimeout(idle);
-          signal.removeEventListener("abort", abortAttempt);
-        }
-        await sleep(delay, signal);
-        delay = Math.min(delay * 2, 30_000);
-      }
-    };
-    void run();
-    return () => controller.abort();
-  }
 }
 
-export function normalizeBaseUrl(url: string): string {
-  const trimmed = url.trim().replace(/\/+$/, "");
-  return trimmed || DEFAULT_BASE_URL;
+export function base64ToBlob(base64: string, type: string): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type });
 }
 
-async function toError(res: Response): Promise<CompanionError> {
-  let body: Partial<ApiError> | undefined;
-  try {
-    body = (await res.json()) as Partial<ApiError>;
-  } catch {
-    body = undefined;
-  }
+export function toError(res: NativeResponse): CompanionError {
+  const body = (res.body ?? undefined) as Partial<ApiError> | undefined;
+  const message = body?.error?.message ?? `Fehler ${res.status}`;
+  // 503: this host process cannot serve (e.g. another browser profile runs the companion).
+  if (res.status === 503) return new CompanionError(503, "unavailable", message, body?.error?.details);
   const code: ApiErrorCode = body?.error?.code ?? STATUS_CODES[res.status] ?? "internal";
-  const message = body?.error?.message ?? `HTTP ${res.status} ${res.statusText}`.trim();
   return new CompanionError(res.status, code, message, body?.error?.details);
-}
-
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(t);
-        resolve();
-      },
-      { once: true },
-    );
-  });
 }

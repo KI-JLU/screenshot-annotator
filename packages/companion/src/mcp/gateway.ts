@@ -1,14 +1,16 @@
+import { request } from "node:http";
+import { isAbsolute } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import type { Handler } from "../http/router.ts";
+import type { DataHandler } from "../http/router.ts";
 import { HttpError, notFound } from "../http/errors.ts";
 import type { ProjectsService } from "../projects/projects.ts";
 import type { Store } from "../store/store.ts";
 
-export function registerGatewayHandlers(registerInternal: (method: string, path: string, handler: Handler) => void, store: Store, projects: ProjectsService): void {
+export function registerGatewayHandlers(registerInternal: (method: string, path: string, handler: DataHandler) => void, store: Store, projects: ProjectsService): void {
   const prefix = "/internal/projects/:projectId/reviews/:reviewId";
-  const scoped = (action: (ctx: Parameters<Handler>[0], project: ReturnType<ProjectsService["config"]>) => unknown): Handler => async (ctx) => {
+  const scoped = (action: (ctx: Parameters<DataHandler>[0], project: ReturnType<ProjectsService["config"]>) => unknown): DataHandler => async (ctx) => {
     const review = store.getReview(ctx.params.reviewId!);
     if (!review || review.projectId !== ctx.params.projectId) notFound("Review");
     const project = projects.config(review.projectId);
@@ -16,7 +18,7 @@ export function registerGatewayHandlers(registerInternal: (method: string, path:
     catch (error) { if (error instanceof HttpError) throw error; throw new HttpError(502, "kan_error", "Kan-Daten konnten nicht gelesen werden"); }
   };
   registerInternal("GET", `${prefix}/cards/search`, scoped((ctx, project) => {
-    const query = ctx.url.searchParams.get("query");
+    const query = ctx.query.get("query");
     if (!query?.trim()) throw new HttpError(400, "validation", "Suchbegriff fehlt");
     return projects.client(project.target.baseUrl).searchCards(project.target.workspacePublicId, query);
   }));
@@ -31,20 +33,27 @@ export function registerGatewayHandlers(registerInternal: (method: string, path:
 }
 
 /** Exported independently of stdio so tests exercise the exact tool handlers. */
-export function createGatewayHandlers(env: NodeJS.ProcessEnv = process.env, fetcher: typeof fetch = fetch) {
+export function createGatewayHandlers(env: NodeJS.ProcessEnv = process.env) {
   async function read(path: string): Promise<unknown> {
-    const base = env.WEBSITE_REVIEW_COMPANION_URL;
+    const socketPath = env.WEBSITE_REVIEW_COMPANION_SOCKET;
     const token = env.WEBSITE_REVIEW_INTERNAL_TOKEN;
     const review = env.WEBSITE_REVIEW_REVIEW_ID;
     const project = env.WEBSITE_REVIEW_PROJECT_ID;
-    if (!base || !token || !review || !project) throw new Error("MCP-Gateway ist nicht eingerichtet");
-    const url = new URL(base);
-    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password) throw new Error("Ungültige Begleitdienst-Adresse");
-    const response = await fetcher(`${url.origin}/internal/projects/${encodeURIComponent(project)}/reviews/${encodeURIComponent(review)}${path}`, {
-      headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000), redirect: "error",
+    if (!socketPath || !token || !review || !project) throw new Error("MCP-Gateway ist nicht eingerichtet");
+    if (!isAbsolute(socketPath)) throw new Error("Ungültige Begleitdienst-Adresse");
+    return new Promise((resolve, reject) => {
+      const req = request({ socketPath, path: `/internal/projects/${encodeURIComponent(project)}/reviews/${encodeURIComponent(review)}${path}`,
+        method: "GET", headers: { "X-Website-Review-Token": token }, signal: AbortSignal.timeout(30_000) }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("error", reject);
+        res.on("end", () => {
+          if (!res.statusCode || res.statusCode >= 400) { reject(new Error("Begleitdienst konnte die angefragten Daten nicht liefern")); return; }
+          try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); } catch (error) { reject(error); }
+        });
+      });
+      req.on("error", reject); req.end();
     });
-    if (!response.ok) throw new Error("Begleitdienst konnte die angefragten Daten nicht liefern");
-    return response.json();
   }
   return {
     kan_search_cards: ({ query }: { query: string }) => read(`/cards/search?${new URLSearchParams({ query })}`),

@@ -59,6 +59,8 @@ export interface NativeHello {
   version: string;
   /** Present when this host process cannot serve (e.g. another browser profile already runs the companion). */
   problem?: string;
+  /** Machine-readable kind of `problem`: another profile holds the instance lock, or startup failed. */
+  problemCode?: "locked" | "startup_failed";
 }
 
 export type NativeIncoming = NativeRequest;

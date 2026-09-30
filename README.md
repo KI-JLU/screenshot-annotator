@@ -10,7 +10,7 @@ Personal website reviews for an internal team: comment on dev and staging pages 
 | Package | What it does |
 | --- | --- |
 | `packages/extension` | Chrome MV3 extension. The side panel handles projects, reviews, comments, questions and decisions; an overlay marks an element, a free position or the whole page; screenshot preview with crop. |
-| `packages/companion` | Local companion service (`website-review-companion`). Owns the SQLite state, checks checkouts, runs `codex app-server`, provides the read-only `review` MCP gateway to Codex, and publishes to Kan with an operation log and reconciliation. |
+| `packages/companion` | Local companion (`website-review-companion`), started by Chrome via Native Messaging. Owns the SQLite state, checks checkouts, runs `codex app-server`, provides the read-only `review` MCP gateway to Codex, and publishes to Kan with an operation log and reconciliation. |
 | `packages/shared` | Contract between the two: domain types, HTTP API, project config schema, URL rules, states. |
 
 ## Requirements
@@ -25,39 +25,19 @@ Personal website reviews for an internal team: comment on dev and staging pages 
 ```bash
 npm install
 npm run build
-node packages/companion/dist/cli.js serve        # listens on 127.0.0.1:47821
+node packages/companion/dist/cli.js install-native-host   # registers the companion with Chrome/Chromium
 ```
 
-Load the extension: `chrome://extensions` → enable developer mode → "Load unpacked" → `packages/extension/dist`.
+Load the extension: `chrome://extensions` → enable developer mode → "Load unpacked" → `packages/extension/dist`. The extension id is fixed (`ncgffplfgbdklhlkklkfefbennjdbnko`) and must match the one the host manifest allows.
 
-Then connect them:
+There is no service to start and nothing to pair. Opening the side panel makes Chrome start the companion; it runs while Chrome is open.
 
-1. Open the side panel (extension icon). Get a pairing code with `node packages/companion/dist/cli.js pair` and enter it in the panel.
+1. Open the side panel (extension icon). It should show "Begleitdienst verbunden".
 2. Under "Projekte", create a project or import a shared config. Enter the Kan base URL and your API key, then choose workspace, board and list.
 3. Map every repository alias to your local checkout and click "Prüfen".
 4. Allow the extension access to websites when asked. It needs this for screenshots.
 
-### Run as a systemd user service
-
-```ini
-# ~/.config/systemd/user/website-review-companion.service
-[Unit]
-Description=Website Review companion
-
-[Service]
-ExecStart=/usr/bin/env node %h/path/to/ReviewChrome/packages/companion/dist/cli.js serve
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-```
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now website-review-companion
-```
-
-The unit's PATH must include `codex`. If it doesn't, add `Environment=PATH=…`.
+`install-native-host` records the absolute paths of `node` and `codex` at install time. Run it again after moving the repository or changing your Node or Codex installation. `uninstall-native-host` removes the registration, and `status` shows what is installed.
 
 ## Usage
 
@@ -91,4 +71,4 @@ npm run build
 Integration checks that use real services:
 
 - `node scripts/smoke-codex.ts <git checkout>` runs one real analysis turn against `codex app-server`.
-- `node scripts/e2e-local.mjs <git checkout>` runs the full stack (companion, real Codex, gateway MCP) against the local fake Kan in `scripts/fake-kan.mjs`. It pairs, sets up a project, captures three comments, processes them, answers questions, decides duplicates and prints the resulting Kan state. It needs a prior `npm run build`.
+- `node scripts/e2e-local.mjs <git checkout>` runs the full stack (native host, real Codex, gateway MCP) against the local fake Kan in `scripts/fake-kan.mjs`. It speaks the native-messaging framing directly, sets up a project, captures three comments, processes them, answers questions, decides duplicates and prints the resulting Kan state. It needs a prior `npm run build`.

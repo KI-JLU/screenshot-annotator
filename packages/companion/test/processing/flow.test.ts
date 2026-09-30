@@ -52,7 +52,7 @@ describe("processing over HTTP", () => {
     const first = vi.mocked(f.runner.analyze).mock.calls[0]![0];
     expect(first.checkouts[0]).toMatchObject({ alias: "frontend", path: f.checkout, headCommit: expect.stringMatching(/^[a-f0-9]+$/) });
     expect(first.comments[0]?.imagePath).toContain("-r1.png"); expect(first.otherComments).toHaveLength(9);
-    expect(first.gateway).toMatchObject({ command: processExecPath(), args: ["/test/cli.js", "mcp"], env: { WEBSITE_REVIEW_COMPANION_URL: f.url, WEBSITE_REVIEW_REVIEW_ID: f.review.id } });
+    expect(first.gateway).toMatchObject({ command: processExecPath(), args: ["/test/cli.js", "mcp"], env: { WEBSITE_REVIEW_COMPANION_SOCKET: f.socketPath, WEBSITE_REVIEW_REVIEW_ID: f.review.id } });
     expect(JSON.stringify(first)).not.toContain("private-kan-token"); expect(events).toContain("comment.updated"); expect(events).toContain("review.updated");
   });
   it("isolates analysis failures and retries only the failed analysis", async () => {
@@ -110,7 +110,7 @@ describe("processing over HTTP", () => {
     release(); await f.idle(); expect(state(c.id)).toMatchObject({ revision: 2, state: "draft" });
     expect(state(c.id).analysis).toBeUndefined(); expect(f.kan.createCard).not.toHaveBeenCalled();
   });
-  it("persists idempotent capture IDs per review, including concurrent HTTP retries and restart", async () => {
+  it("persists idempotent capture IDs per review, including concurrent request retries and restart", async () => {
     const input = { ...commentInput(true), clientRequestId: randomUUID() };
     const [a, b] = await Promise.all([f.create(input), f.create(input)]); expect(a.id).toBe(b.id);
     await f.restart(); expect((await f.create(input)).id).toBe(a.id);

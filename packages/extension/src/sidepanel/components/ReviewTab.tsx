@@ -61,7 +61,7 @@ function TabReview({ tab }: { tab: ActiveTab | null }) {
   };
 
   useEffect(() => {
-    if (!origin || online === false) return;
+    if (!origin || online !== true) return;
     void runMatch(url);
   }, [url, origin, online, client]);
 
@@ -121,6 +121,7 @@ function TabReview({ tab }: { tab: ActiveTab | null }) {
   if (online === false) {
     return <p class="muted">Ohne Verbindung zum Begleitdienst können keine Projekte zugeordnet werden.</p>;
   }
+  if (online === null) return <p class="muted">Verbinde mit dem Begleitdienst …</p>;
   if (currentMatch.status === "loading") {
     return <p class="muted">Prüfe Projektzuordnung …</p>;
   }

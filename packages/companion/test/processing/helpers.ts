@@ -8,7 +8,7 @@ import { createApp } from "../../src/app.ts";
 import type { AnalysisInput, AnalysisOutput, AnalysisResult, AnalysisRunner } from "../../src/codex/types.ts";
 import { KanError, type KanCardDetail, type KanClient, type KanCreateCardInput, type KanUploadInput } from "../../src/kan/types.ts";
 import { ReviewProcessingService } from "../../src/processing/service.ts";
-import { config, commentInput, ORIGIN } from "../core/helpers.ts";
+import { config, commentInput, caller } from "../core/helpers.ts";
 
 export const ready = (): AnalysisOutput => ({ duplicateCheck: "done", outcome: "ready", ticket: { title: "Mehr Luft", desiredChange: "Mehr Abstand im Filterbereich", implementationIdeas: [], openPoints: [] }, findings: [], questions: [], duplicates: [], mergeWith: [] });
 export class MemoryKan implements KanClient {
@@ -56,22 +56,32 @@ export async function setup() {
   const kan = new MemoryKan();
   let analyze: (input: AnalysisInput) => Promise<AnalysisResult> = async () => ({ ok: true, threadId: "thread", output: ready() });
   const runner: AnalysisRunner = { analyze: vi.fn((input: AnalysisInput) => analyze(input)), probe: vi.fn(async () => ({ available: true })), close: vi.fn(async () => {}) };
-  const options = { dataDir: join(dir, "data"), configDir: join(dir, "config"), port: 0, kanClientFactory: () => kan, analysisRunner: runner, cliPath: "/test/cli.js" };
+  const options = { dataDir: join(dir, "data"), configDir: join(dir, "config"), kanClientFactory: () => kan, analysisRunner: runner, cliPath: "/test/cli.js" };
   let app = createApp(options);
   app.store.saveProject(config()); app.store.setCheckouts("example", { frontend: checkout }); app.secrets.set(kan.baseUrl, "private-kan-token");
   const review = app.store.createReview("example");
-  let url = (await app.start()).url;
-  const token = "extension-token"; app.store.pair(app.store.createPairingCode(), ORIGIN, token);
-  const request = (path: string, body?: unknown, method = "POST") => fetch(url + path, { method, headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  await app.start();
+  const call = (method: string, path: string, body?: unknown) => caller(app)(method, path, body);
+  const request = (path: string, body?: unknown, method = "POST") => call(method, path, body);
+  const captures = new Set<string>();
+  let capturedAt = Date.now();
   const create = async (input: CreateCommentRequest = commentInput()): Promise<Comment> => {
-    const response = await request(`/v1/reviews/${review.id}/comments`, input); if (!response.ok) throw new Error(await response.text()); return await response.json() as Comment;
+    const response = await request(`/v1/reviews/${review.id}/comments`, input); if (!response.ok) throw new Error(await response.text());
+    const comment = await response.json() as Comment;
+    // Model ordered captures explicitly: direct dispatch can create two in the same millisecond.
+    // Store ordering uses a random ID to break timestamp ties.
+    if (!captures.has(comment.id)) {
+      captures.add(comment.id);
+      app.store.db.prepare("UPDATE comments SET created_at = ? WHERE id = ?").run(new Date(capturedAt++).toISOString(), comment.id);
+    }
+    return app.store.getComment(comment.id)!;
   };
-  return { dir, checkout, kan, runner, review, request, create, get app() { return app; }, get url() { return url; },
+  return { dir, checkout, kan, runner, review, call, request, create, get app() { return app; }, get socketPath() { return app.socketPath; },
     processing: () => app.processing as ReviewProcessingService,
     analyze: (fn: typeof analyze) => { analyze = fn; },
     process: () => request(`/v1/reviews/${review.id}/process`),
     idle: () => (app.processing as ReviewProcessingService).idle(),
-    async restart() { await app.stop(); app = createApp(options); url = (await app.start()).url; },
+    async restart() { await app.stop(); app = createApp(options); await app.start(); },
     async close() { await app.stop(); rmSync(dir, { recursive: true, force: true }); },
   };
 }

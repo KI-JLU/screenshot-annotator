@@ -2,11 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 
 export function migrate(db: DatabaseSync): void {
   db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-  // Read the version under the write lock: pair and serve can start together.
+  // Read the version under the migration write lock.
   db.exec("BEGIN IMMEDIATE");
   try {
     const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-    if (version > 3) throw new Error("Datenbankversion wird nicht unterstützt");
+    if (version > 4) throw new Error("Datenbankversion wird nicht unterstützt");
     if (version === 0) db.exec(`
     CREATE TABLE projects (project_id TEXT PRIMARY KEY, config_json TEXT NOT NULL);
     CREATE TABLE checkouts (
@@ -54,6 +54,10 @@ export function migrate(db: DatabaseSync): void {
         PRIMARY KEY (comment_id, namespace)
       );
       PRAGMA user_version = 3;`);
+    if (version < 4) db.exec(`
+      DROP TABLE IF EXISTS pairing;
+      DROP TABLE IF EXISTS pairing_codes;
+      PRAGMA user_version = 4;`);
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }

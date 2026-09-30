@@ -25,7 +25,7 @@ export interface ProcessingOptions {
   projects: ProjectsService;
   runner: AnalysisRunner;
   internalToken: string;
-  companionUrl: () => string;
+  socketPath: () => string;
   cliPath?: string;
 }
 
@@ -143,7 +143,7 @@ export class ReviewProcessingService implements ProcessingService {
         .filter((c) => c.id !== primary.id && c.state !== "published" && !c.ticket)
         .map((c) => ({ commentId: c.id, text: c.text, url: c.context.url })),
       gateway: { command: process.execPath, args: [this.options.cliPath ?? process.argv[1] ?? fileURLToPath(new URL("../cli.ts", import.meta.url)), "mcp"],
-        env: { WEBSITE_REVIEW_COMPANION_URL: this.options.companionUrl(), WEBSITE_REVIEW_INTERNAL_TOKEN: this.options.internalToken,
+        env: { WEBSITE_REVIEW_COMPANION_SOCKET: this.options.socketPath(), WEBSITE_REVIEW_INTERNAL_TOKEN: this.options.internalToken,
           WEBSITE_REVIEW_REVIEW_ID: review.id, WEBSITE_REVIEW_PROJECT_ID: project.projectId } }, signal: this.abort.signal,
     };
     const result = await this.options.runner.analyze(input);

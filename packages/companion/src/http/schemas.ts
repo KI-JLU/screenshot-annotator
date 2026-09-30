@@ -37,7 +37,6 @@ export const UpdateCommentSchema = z.object({
   context: z.object({ extraContext: z.string().optional() }).strict().optional(),
   screenshot: ScreenshotSchema.optional(), imagePngBase64: z.string().min(1).optional(),
 }).strict();
-export const PairSchema = z.object({ code: z.string().regex(/^[A-Z2-9]{8}$/) }).strict();
 export const ImportSchema = z.object({ config: z.unknown(), replaceExisting: z.boolean().optional() }).strict();
 export const SetCheckoutsSchema = z.object({ checkouts: z.record(z.string().min(1)) }).strict();
 export const MatchSchema = z.object({ url: z.string().url() }).strict();

@@ -8,7 +8,7 @@ import type {
 } from "@website-review/shared";
 import { EventBus } from "../events/eventBus.ts";
 import { conflict, notFound } from "../http/errors.ts";
-import { hashSecret, newId, newPairingCode } from "../ids.ts";
+import { newId } from "../ids.ts";
 import { ensurePrivateDir } from "../paths.ts";
 import { migrate } from "./schema.ts";
 
@@ -140,31 +140,6 @@ export class Store {
       const insert = this.db.prepare("INSERT INTO checkouts VALUES (?, ?, ?)");
       for (const [alias, path] of Object.entries(checkouts)) insert.run(projectId, alias, path);
       this.emit({ type: "projects.updated" });
-    });
-  }
-
-  getPairing(): { extensionOrigin: string; tokenHash: string } | undefined {
-    const row = this.db.prepare("SELECT * FROM pairing WHERE id = 1").get();
-    return row ? { extensionOrigin: String(row.extension_origin), tokenHash: String(row.token_hash) } : undefined;
-  }
-  createPairingCode(time = Date.now()): string {
-    const code = newPairingCode();
-    this.transaction(() => {
-      this.db.prepare("DELETE FROM pairing_codes WHERE expires_at <= ?").run(time);
-      this.db.prepare("INSERT INTO pairing_codes VALUES (?, ?)").run(hashSecret(code), time + 10 * 60_000);
-    });
-    return code;
-  }
-  pair(code: string, origin: string, token: string, time = Date.now()): boolean {
-    return this.transaction(() => {
-      const consumed = this.db.prepare("DELETE FROM pairing_codes WHERE code_hash = ? AND expires_at > ?")
-        .run(hashSecret(code), time);
-      if (!consumed.changes) return false;
-      this.db.prepare("INSERT INTO pairing VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET extension_origin = excluded.extension_origin, token_hash = excluded.token_hash")
-        .run(origin, hashSecret(token));
-      // Re-pairing invalidates any other outstanding code as well as the old token.
-      this.db.exec("DELETE FROM pairing_codes");
-      return true;
     });
   }
 

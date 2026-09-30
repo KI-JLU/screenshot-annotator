@@ -2,7 +2,9 @@ import { build } from "esbuild";
 
 await build({
   entryPoints: ["src/cli.ts"],
-  outfile: "dist/cli.js",
+  outdir: "dist",
+  splitting: true,
+  chunkNames: "chunks/[name]-[hash]",
   bundle: true,
   platform: "node",
   format: "esm",

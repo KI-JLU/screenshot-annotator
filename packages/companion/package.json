@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "start": "node dist/cli.js serve"
+    "start": "node dist/cli.js --help"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.0",

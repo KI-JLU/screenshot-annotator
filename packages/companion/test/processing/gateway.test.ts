@@ -1,12 +1,13 @@
+import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createGatewayHandlers } from "../../src/mcp/gateway.ts";
 import { setup, type Fixture } from "./helpers.ts";
 let f: Fixture;
 beforeEach(async () => { f = await setup(); });
 afterEach(async () => { await f.close(); });
-const env = () => ({ WEBSITE_REVIEW_COMPANION_URL: f.url, WEBSITE_REVIEW_INTERNAL_TOKEN: f.app.internalToken, WEBSITE_REVIEW_REVIEW_ID: f.review.id, WEBSITE_REVIEW_PROJECT_ID: "example" });
+const env = () => ({ WEBSITE_REVIEW_COMPANION_SOCKET: f.socketPath, WEBSITE_REVIEW_INTERNAL_TOKEN: f.app.internalToken, WEBSITE_REVIEW_REVIEW_ID: f.review.id, WEBSITE_REVIEW_PROJECT_ID: "example" });
 describe("read-only gateway", () => {
-  it("runs all four handlers against the authenticated internal HTTP routes", async () => {
+  it("runs all four handlers against the authenticated Unix socket routes", async () => {
     const c = await f.create(); f.kan.seed(); const tools = createGatewayHandlers(env());
     expect(Object.keys(tools)).toEqual(["kan_search_cards", "kan_list_board_cards", "kan_get_card", "review_list_comments"]);
     expect(await tools.kan_search_cards({ query: "Titel" })).toMatchObject([{ publicId: "existing" }]);
@@ -19,12 +20,17 @@ describe("read-only gateway", () => {
   it("rejects wrong internal tokens and review/project mismatches", async () => {
     await expect(createGatewayHandlers({ ...env(), WEBSITE_REVIEW_INTERNAL_TOKEN: "wrong" }).review_list_comments()).rejects.toThrow("Begleitdienst");
     await expect(createGatewayHandlers({ ...env(), WEBSITE_REVIEW_PROJECT_ID: "other" }).review_list_comments()).rejects.toThrow("Begleitdienst");
-    await expect(createGatewayHandlers({ ...env(), WEBSITE_REVIEW_COMPANION_URL: "https://external.test" }).review_list_comments()).rejects.toThrow("Adresse");
+    await expect(createGatewayHandlers({ ...env(), WEBSITE_REVIEW_COMPANION_SOCKET: "https://external.test" }).review_list_comments()).rejects.toThrow("Adresse");
   });
-  it("allows bearer-only extension requests and rejects a present foreign Origin", async () => {
-    expect((await f.request("/v1/projects", undefined, "GET")).status).toBe(200);
-    const response = await fetch(f.url + "/v1/projects", { headers: { Authorization: "Bearer extension-token", Origin: "https://hostile.test" } });
-    expect(response.status).toBe(403); expect(response.headers.get("access-control-allow-origin")).toBeNull();
-    expect((await fetch(f.url + "/v1/projects")).status).toBe(401);
+  it("exposes only internal routes on the socket and requires the process token", async () => {
+    const call = (path: string, token?: string) => new Promise<number>((resolve, reject) => {
+      const req = request({ socketPath: f.socketPath, path, headers: token ? { "X-Website-Review-Token": token } : {} }, (res) => {
+        res.resume(); res.on("end", () => resolve(res.statusCode!));
+      });
+      req.on("error", reject); req.end();
+    });
+    expect(await call("/v1/health", f.app.internalToken)).toBe(404);
+    expect(await call(`/internal/projects/example/reviews/${f.review.id}/comments`)).toBe(401);
+    expect(await call(`/internal/projects/example/reviews/${f.review.id}/comments`, f.app.internalToken)).toBe(200);
   });
 });

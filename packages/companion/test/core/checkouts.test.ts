@@ -50,12 +50,12 @@ describe("checkout validation", () => {
     const path = await repo();
     const f: Fixture = await fixture();
     try {
-      await f.pair();
-      await f.request("POST", "/v1/projects", config());
-      await f.request("PUT", "/v1/kan/credentials", { baseUrl: "https://kan.example", apiToken: "token" });
-      const response = await f.request("PUT", "/v1/projects/example/checkouts", { checkouts: { frontend: path } });
+
+      await f.call("POST", "/v1/projects", config());
+      await f.call("PUT", "/v1/kan/credentials", { baseUrl: "https://kan.example", apiToken: "token" });
+      const response = await f.call("PUT", "/v1/projects/example/checkouts", { checkouts: { frontend: path } });
       expect((await response.json() as ProjectView).readyForProcessing).toBe(true);
-      const invalid = await f.request("PUT", "/v1/projects/example/checkouts", { checkouts: { frontend: "relative" } });
+      const invalid = await f.call("PUT", "/v1/projects/example/checkouts", { checkouts: { frontend: "relative" } });
       expect(invalid.status).toBe(400);
       expect(f.app.store.getCheckouts("example")).toEqual({ frontend: path });
     } finally { await f.close(); }

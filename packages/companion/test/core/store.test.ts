@@ -19,9 +19,9 @@ describe("SQLite persistence and transactions", () => {
   });
   afterEach(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
 
-  it("uses WAL, migration version 3 and reopens durable data", () => {
+  it("uses WAL, migration version 4 and reopens durable data", () => {
     expect(store.db.prepare("PRAGMA journal_mode").get()?.journal_mode).toBe("wal");
-    expect(store.db.prepare("PRAGMA user_version").get()?.user_version).toBe(3);
+    expect(store.db.prepare("PRAGMA user_version").get()?.user_version).toBe(4);
     store.setCodexThreadId(comment.reviewId, "thread");
     store.setQuestions(comment.id, [{ id: "q", text: "Welcher Bereich?", answer: "Filter" }]);
     store.close(); store = new Store(dir);
@@ -33,7 +33,7 @@ describe("SQLite persistence and transactions", () => {
     const op = store.insertOp({ commentId: comment.id, revision: 1, kind: "create_card" });
     store.db.exec("DROP TABLE processing_records; DROP INDEX comments_client_request; ALTER TABLE comments DROP COLUMN client_request_id; PRAGMA user_version = 1;");
     store.close(); store = new Store(dir);
-    expect(store.db.prepare("PRAGMA user_version").get()?.user_version).toBe(3);
+    expect(store.db.prepare("PRAGMA user_version").get()?.user_version).toBe(4);
     expect(store.getComment(comment.id)).toEqual(comment);
     expect(store.getOp(op.id)).toEqual(op);
   });
@@ -65,12 +65,10 @@ describe("SQLite persistence and transactions", () => {
     expect(events).toEqual([{ type: "comment.updated", reviewId: comment.reviewId, commentId: comment.id }, { type: "review.updated", reviewId: comment.reviewId }]);
   });
 
-  it("allows the pair CLI and server to share the WAL database", () => {
-    const second = new Store(dir);
-    try {
-      const code = second.createPairingCode();
-      expect(store.pair(code, "chrome-extension://abc", "token")).toBe(true);
-      expect(second.getPairing()?.extensionOrigin).toBe("chrome-extension://abc");
-    } finally { second.close(); }
+  it("drops legacy pairing tables while retaining reviews and comments", () => {
+    store.db.exec("CREATE TABLE pairing (token TEXT); CREATE TABLE pairing_codes (code TEXT); PRAGMA user_version = 3;");
+    store.close(); store = new Store(dir);
+    expect(store.db.prepare("SELECT name FROM sqlite_master WHERE name IN ('pairing', 'pairing_codes')").all()).toEqual([]);
+    expect(store.getComment(comment.id)?.text).toBe(comment.text);
   });
 });

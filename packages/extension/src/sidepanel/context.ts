@@ -1,17 +1,21 @@
 import { createContext } from "preact";
 import { useCallback, useContext, useState } from "preact/hooks";
 import type { CompanionEvent, ProjectView } from "@website-review/shared";
-import type { CompanionClient, CompanionSettings } from "../lib/api.ts";
+import type { CompanionClient } from "../lib/api.ts";
+import type { HostStatus } from "../lib/nativeTransport.ts";
 
 export type View = "review" | "projects" | "connection";
 
-/** Companion events plus a local signal after the event stream (re)connected: refetch everything. */
+/** Companion events plus a local signal after the host (re)connected: refetch everything. */
 export type PanelEvent = CompanionEvent | { type: "reconnected" };
 
 export interface AppContextValue {
   client: CompanionClient;
-  settings: CompanionSettings;
-  /** null = not known yet */
+  /** Native host status as reported by the background worker. */
+  hostStatus: HostStatus;
+  /** Ask the worker to reconnect to the native host now. */
+  reconnect(): void;
+  /** true = connected and ready, false = not usable, null = connecting */
   online: boolean | null;
   projects: ProjectView[] | null;
   reloadProjects(): Promise<void>;

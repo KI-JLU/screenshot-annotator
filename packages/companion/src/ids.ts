@@ -12,8 +12,3 @@ export function matchesHash(value: string, hash: string): boolean {
   const b = Buffer.from(hash, "hex");
   return a.length === b.length && timingSafeEqual(a, b);
 }
-
-export function newPairingCode(): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return [...randomBytes(8)].map((byte) => alphabet[byte % alphabet.length]).join("");
-}

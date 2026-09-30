@@ -1,6 +1,7 @@
 /**
- * Background service worker: opens the side panel on action click, injects the capture overlay on
- * demand and takes the screenshot once the overlay has removed itself.
+ * Background service worker: opens the side panel on action click, owns the native messaging port
+ * to the companion (nativeHost.ts), injects the capture overlay on demand and takes the screenshot
+ * once the overlay has removed itself.
  *
  * The worker may be suspended while the user is choosing an element, so no capture state is kept in
  * memory: the overlay's selection message carries everything needed.
@@ -16,6 +17,10 @@ import {
   type WorkerBroadcast,
   type WorkerToContent,
 } from "../lib/messages.ts";
+import { installNativeHostBridge } from "./nativeHost.ts";
+
+// Registered synchronously at startup so a panel connecting wakes the worker and is handled.
+installNativeHostBridge();
 
 void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((e: unknown) => {
   console.error("setPanelBehavior failed", e);

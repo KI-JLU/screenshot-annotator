@@ -1,15 +1,16 @@
 // Full-stack local run: real companion + real `codex app-server` + gateway MCP, against scripts/fake-kan.mjs.
 // Usage: node scripts/e2e-local.mjs <checkoutDir>
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { deflateSync } from "node:zlib";
 
 const checkout = resolve(process.argv[2]);
-const KAN = 47900, PORT = 47931, ORIGIN = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+const KAN = 47900;
+const { EXTENSION_ID } = await import("../packages/shared/src/native.ts");
 const root = mkdtempSync(join(tmpdir(), "wr-e2e-"));
-const env = { ...process.env, WEBSITE_REVIEW_DATA_DIR: join(root, "data"), WEBSITE_REVIEW_CONFIG_DIR: join(root, "config") };
+const env = { ...process.env, WEBSITE_REVIEW_DATA_DIR: join(root, "data"), WEBSITE_REVIEW_CONFIG_DIR: join(root, "config"), XDG_RUNTIME_DIR: join(root, "runtime") };
 const cli = resolve("packages/companion/dist/cli.js");
 const procs = [];
 const start = (args, e = env) => { const p = spawn(process.execPath, args, { env: e, stdio: ["ignore", "inherit", "inherit"] }); procs.push(p); return p; };
@@ -17,19 +18,56 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 process.on("exit", () => procs.forEach((p) => p.kill()));
 
 start(["scripts/fake-kan.mjs", String(KAN)]);
-start([cli, "serve", "--port", String(PORT)]);
+const host = spawn(process.execPath, [cli, "native-host", `chrome-extension://${EXTENSION_ID}/`], { env, stdio: ["pipe", "pipe", "inherit"] });
+procs.push(host);
+let buffered = Buffer.alloc(0), nextId = 0;
+const pending = new Map(), chunks = new Map();
+let helloResolve, helloReject;
+const hello = new Promise((resolve, reject) => { helloResolve = resolve; helloReject = reject; });
+const fail = (error) => { helloReject(error); for (const p of pending.values()) { clearTimeout(p.timer); p.reject(error); } pending.clear(); };
+host.on("error", fail);
+host.on("exit", (code) => fail(new Error(`Native host exited: ${code}`)));
+host.stdin.on("error", fail);
+function receive(frame) {
+  if (frame.type === "hello") { if (frame.problem) fail(new Error(frame.problem)); else helloResolve(); }
+  if (frame.type === "chunk") {
+    let parts = chunks.get(frame.id);
+    if (!parts) { parts = { data: new Array(frame.count), received: 0 }; chunks.set(frame.id, parts); }
+    if (parts.data[frame.index] === undefined) parts.received++;
+    parts.data[frame.index] = frame.data;
+    if (parts.received === frame.count) { chunks.delete(frame.id); receive(JSON.parse(parts.data.join(""))); }
+  }
+  if (frame.type === "response") {
+    const p = pending.get(frame.id);
+    if (p) { clearTimeout(p.timer); pending.delete(frame.id); p.resolve(frame); }
+  }
+}
+host.stdout.on("data", (data) => {
+  buffered = Buffer.concat([buffered, data]);
+  try {
+    while (buffered.length >= 4) {
+      const length = buffered.readUInt32LE();
+      if (!length || length > 1024 * 1024) throw new Error("Invalid native frame length");
+      if (buffered.length < 4 + length) break;
+      receive(JSON.parse(buffered.subarray(4, 4 + length).toString("utf8")));
+      buffered = buffered.subarray(4 + length);
+    }
+  } catch (error) { fail(error); host.kill(); }
+});
+await hello;
 await sleep(1500);
-
-let token;
 async function api(method, path, body) {
-  const res = await fetch(`http://127.0.0.1:${PORT}${path}`, {
-    method, headers: { Origin: ORIGIN, "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
+  const id = String(++nextId);
+  const json = Buffer.from(JSON.stringify({ type: "request", id, method, path, body }));
+  const prefix = Buffer.alloc(4); prefix.writeUInt32LE(json.length);
+  const response = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} ${path} timed out`)); }, 120_000);
+    pending.set(id, { resolve, reject, timer });
   });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : undefined;
-  if (!res.ok) throw new Error(`${method} ${path} → ${res.status} ${text}`);
-  return data;
+  host.stdin.write(Buffer.concat([prefix, json]));
+  const res = await response;
+  if (res.status >= 400) throw new Error(`${method} ${path} → ${res.status} ${JSON.stringify(res.body)}`);
+  return res.body;
 }
 
 function png(w, h) {
@@ -41,9 +79,7 @@ function png(w, h) {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]).toString("base64");
 }
 
-const code = execFileSync(process.execPath, [cli, "pair"], { env, encoding: "utf8" }).match(/[A-Z0-9]{8}/)?.[0];
-({ token } = await api("POST", "/v1/pair", { code }));
-console.log("paired");
+console.log("connected");
 await api("PUT", "/v1/kan/credentials", { baseUrl: `http://127.0.0.1:${KAN}`, apiToken: "fake-kan-token" });
 const config = {
   schemaVersion: 1, projectId: "demo", name: "Demo",
@@ -97,4 +133,6 @@ for (let i = 0; i < 180; i++) {
 }
 const kan = await (await fetch(`http://127.0.0.1:${KAN}/__state`)).json();
 console.log("KAN STATE", JSON.stringify(kan, null, 1));
+host.stdin.end();
+await new Promise((resolve) => host.once("exit", resolve));
 process.exit(0);
