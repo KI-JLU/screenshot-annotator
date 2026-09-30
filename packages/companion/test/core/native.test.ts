@@ -186,6 +186,23 @@ describe("built CLI", () => {
     execFileSync(process.execPath, [cli, "install-native-host", "--browser", "chromium"], { env, stdio: "pipe" });
     expect(existsSync(manifest("chromium"))).toBe(true);
   });
+  it("installs a flatpak-spawn wrapper for Flatpak Chrome without changing sandbox permissions", () => {
+    const root = temporary(), env = envFor(root);
+    const appDir = join(env.HOME!, ".var/app/com.google.Chrome");
+    mkdirSync(appDir, { recursive: true });
+    const out = execFileSync(process.execPath, [cli, "install-native-host"], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const launcher = join(root, "data/native-host.sh");
+    const wrapper = join(appDir, "data/website-review/native-host-flatpak.sh");
+    expect(statSync(wrapper).mode & 0o777).toBe(0o755);
+    expect(readFileSync(wrapper, "utf8")).toContain(`exec /usr/bin/flatpak-spawn --host --watch-bus '${launcher}' "$@"`);
+    const manifest = join(appDir, "config/google-chrome/NativeMessagingHosts", `${NATIVE_HOST_NAME}.json`);
+    expect(JSON.parse(readFileSync(manifest, "utf8"))).toMatchObject({ path: wrapper, type: "stdio" });
+    // Only the detected Flatpak browser is targeted; the plain Chrome profile does not exist here.
+    expect(existsSync(join(env.XDG_CONFIG_HOME!, "google-chrome"))).toBe(false);
+    expect(out).toContain(manifest);
+    execFileSync(process.execPath, [cli, "uninstall-native-host"], { env, stdio: "pipe" });
+    expect(existsSync(wrapper)).toBe(false); expect(existsSync(manifest)).toBe(false);
+  });
   it("uses the documented macOS browser paths", () => {
     expect(browserDirectories({ HOME: "/tmp/example" }, "darwin")).toEqual({ chrome: "/tmp/example/Library/Application Support/Google/Chrome", chromium: "/tmp/example/Library/Application Support/Chromium" });
   });

@@ -37,6 +37,17 @@ There is no service to start and nothing to pair. Opening the side panel makes C
 3. Map every repository alias to your local checkout and click "Prüfen".
 4. Allow the extension access to websites when asked. It needs this for screenshots.
 
+### Chrome or Chromium as Flatpak
+
+A Flatpak browser only reads host manifests under `~/.var/app/<app-id>/config/…` and cannot see your repository or the host's `node`. `install-native-host` detects `com.google.Chrome` and `org.chromium.Chromium` and installs a small wrapper inside the sandbox directory that starts the real launcher with `flatpak-spawn --host`. For that, the browser needs D-Bus access to `org.freedesktop.Flatpak`:
+
+```bash
+flatpak override --user --talk-name=org.freedesktop.Flatpak com.google.Chrome   # or: install-native-host --allow-flatpak-host
+flatpak kill com.google.Chrome                                                  # then start Chrome again
+```
+
+This lets code running in the browser start commands outside the sandbox, so the Flatpak sandbox no longer protects against a compromised browser. Undo it with `flatpak override --user --no-talk-name=org.freedesktop.Flatpak com.google.Chrome`. The alternative is a non-Flatpak Chrome (RPM/DEB), which needs neither the wrapper nor the permission.
+
 `install-native-host` records the absolute paths of `node` and `codex` at install time. Run it again after moving the repository or changing your Node or Codex installation. `uninstall-native-host` removes the registration, and `status` shows what is installed.
 
 ## Usage
