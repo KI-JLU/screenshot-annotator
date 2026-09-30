@@ -1,10 +1,8 @@
 /**
- * HTTP contract between extension and companion.
- * Base: http://127.0.0.1:47821 (configurable). All bodies JSON unless noted.
- * Every route except POST /v1/pair and GET /v1/health requires
- *   Authorization: Bearer <token>
- * and an Origin header equal to the paired chrome-extension://<id>.
- * Errors: non-2xx with body ApiError.
+ * Request/response contract between extension and companion.
+ * Transport: Chrome Native Messaging with the envelope in native.ts; paths and bodies below.
+ * No auth headers: Chrome only lets the extension listed in the host manifest connect.
+ * Errors: status >= 400 with body ApiError.
  */
 import type {
   CaptureContext,
@@ -18,16 +16,12 @@ import type {
 } from "./domain.ts";
 import type { ProjectConfig } from "./projectConfig.ts";
 
-export const DEFAULT_COMPANION_PORT = 47821;
 export const API_PREFIX = "/v1";
 
 export interface ApiError {
   error: { code: ApiErrorCode; message: string; details?: unknown };
 }
 export type ApiErrorCode =
-  | "unauthorized"
-  | "forbidden_origin"
-  | "invalid_pairing_code"
   | "not_found"
   | "validation"
   | "conflict" // e.g. stale revision, comment not editable
@@ -35,19 +29,10 @@ export type ApiErrorCode =
   | "kan_error"
   | "internal";
 
-// GET /v1/health (no auth)
+// GET /v1/health
 export interface HealthResponse {
   ok: true;
   version: string;
-  paired: boolean;
-}
-
-// POST /v1/pair (no auth; Origin must be chrome-extension://…). Code is printed by `website-review-companion pair`.
-export interface PairRequest {
-  code: string;
-}
-export interface PairResponse {
-  token: string;
 }
 
 // GET /v1/status
@@ -132,7 +117,7 @@ export interface ProcessResponse {
 // POST   /v1/reviews/:reviewId/comments CreateCommentRequest -> Comment
 // PUT    /v1/comments/:commentId  UpdateCommentRequest -> Comment (new revision; 409 if not editable or stale)
 // DELETE /v1/comments/:commentId               -> 204
-// GET    /v1/comments/:commentId/image         -> image/png
+// GET    /v1/comments/:commentId/image         -> ImageResponse { pngBase64 } (native.ts)
 // POST   /v1/comments/:commentId/answer   AnswerRequest   -> Comment
 // POST   /v1/comments/:commentId/decision DecisionInput   -> Comment
 // POST   /v1/comments/:commentId/retry                    -> Comment (only missing steps)
@@ -166,7 +151,7 @@ export type ReconcileRequest =
   | { action: "confirm_absent" }; // user verified no card exists; allow a new create attempt
 
 // ---------- Events ----------
-// GET /v1/events  -> text/event-stream. Clients refetch the affected resource on each event.
+// Pushed as NativeEvent frames (native.ts). Clients refetch the affected resource on each event.
 export type CompanionEvent =
   | { type: "review.updated"; reviewId: string }
   | { type: "comment.updated"; reviewId: string; commentId: string }

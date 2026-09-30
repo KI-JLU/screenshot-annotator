@@ -3,6 +3,7 @@
   "name": "Website Review",
   "short_name": "Review",
   "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7C1O72oPl+p4daLVFM5VN00gLD4kHNXpoPXjchR42HQXceiQ5zAIVXWVa9hB4xexKAHvFOhw1nRm14SACaEGink5H+XJPCN2fcKPaWt0eGyIfmuTEn61SeWg4fgt9D7h1oOn8nFnigqgmrpmZxHu291uBcWf2joVC/8YCgSMXmyL4NBskA89BdZHYuWMkSVKMjyBMerzXJO9nN1CYwnXspWp8M/t/5YhwG/9WACQpOdyjYxXeJ2xJ8L/3PUNtB8cjZcljwxGiQ5BxGYFSwYnXi142fj0K6j7z7xqUmZavoQlGC07aV73athdr48AI8vZgW5pFCDXnRaZy78ziROFZQIDAQAB",
   "description": "Kommentare mit Screenshot auf Dev- und Staging-Seiten erfassen und über den lokalen Begleitdienst als Kan-Tickets verarbeiten.",
   "minimum_chrome_version": "116",
   "icons": {
@@ -25,7 +26,15 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["sidePanel", "storage", "scripting", "tabs", "activeTab"],
-  "host_permissions": ["http://127.0.0.1/*"],
-  "optional_host_permissions": ["<all_urls>"]
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "scripting",
+    "tabs",
+    "activeTab",
+    "nativeMessaging"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ]
 }
