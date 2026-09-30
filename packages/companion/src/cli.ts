@@ -5,9 +5,12 @@ import { createApp } from "./app.ts";
 import { getPaths } from "./paths.ts";
 import { Store } from "./store/store.ts";
 import { createKanClient } from "./kan/kanClient.ts";
+import { createAnalysisRunner } from "./codex/analysisRunner.ts";
+import { startGateway } from "./mcp/gateway.ts";
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { port: { type: "string" } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { port: { type: "string" }, help: { type: "boolean" } } });
+  if (values.help) { console.log("Befehle: serve [--port PORT], pair, status, mcp"); return; }
   const command = positionals[0] ?? "serve";
   const port = values.port === undefined ? DEFAULT_COMPANION_PORT : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Ungültiger Port");
@@ -26,11 +29,10 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "mcp") {
-    // TODO: Dispatch to ./mcp/gateway.ts when the gateway command is implemented.
-    throw new Error("MCP-Gateway noch nicht eingerichtet");
+    await startGateway(); return;
   }
   if (command !== "serve") throw new Error("Befehle: serve [--port PORT], pair, status, mcp");
-  const app = createApp({ ...paths, port, kanClientFactory: createKanClient });
+  const app = createApp({ ...paths, port, kanClientFactory: createKanClient, analysisRunner: createAnalysisRunner(), cliPath: process.argv[1] });
   try {
     const address = await app.start();
     console.log(`Begleitdienst läuft unter ${address.url}`);

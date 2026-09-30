@@ -44,6 +44,12 @@ export class CommentsService {
         if (!current) notFound("Kommentar");
         if (!isEditable(current.state)) conflict("Kommentar kann in diesem Zustand nicht bearbeitet werden");
         if (current.revision !== input.baseRevision) conflict("Kommentar wurde inzwischen geändert");
+        const proposals = this.store.listMergeProposals(current.reviewId).filter((p) => p.status !== "rejected" && p.commentIds.includes(id));
+        const relatedIds = new Set([id, ...proposals.flatMap((p) => p.commentIds)]);
+        if ([...relatedIds].some((memberId) => this.store.getComment(memberId)?.ticket ||
+          this.store.listOpsForComment(memberId).some((op) => op.state !== "failed"))) {
+          conflict("Veröffentlichung wurde bereits begonnen – zuerst fehlende Schritte abschließen");
+        }
         if (input.screenshot && !input.imagePngBase64) throw new HttpError(400, "validation", "PNG-Bild zum Screenshot fehlt");
         if (input.imagePngBase64 && !input.screenshot && !current.screenshot) {
           throw new HttpError(400, "validation", "Screenshot-Angaben fehlen");
@@ -54,6 +60,13 @@ export class CommentsService {
           newPath = this.store.imagePath(id, revision);
           if (input.imagePngBase64) writeFileSync(newPath, decodePng(input.imagePngBase64), { mode: 0o600, flag: "wx" });
           else copyFileSync(previousPath!, newPath);
+        }
+        for (const proposal of proposals) this.store.updateMergeProposal(proposal.id, "rejected");
+        for (const memberId of relatedIds) {
+          this.store.deleteProcessingRecords(memberId);
+          if (memberId !== id && this.store.getComment(memberId)) this.store.updateComment(memberId, {
+            state: "draft", stateDetail: undefined, pendingDecision: undefined, mergeGroupId: undefined, analysis: undefined,
+          });
         }
         return this.store.updateComment(id, {
           revision, text: input.text ?? current.text,

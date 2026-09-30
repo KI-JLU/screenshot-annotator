@@ -19,9 +19,9 @@ describe("SQLite persistence and transactions", () => {
   });
   afterEach(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
 
-  it("uses WAL, migration version 2 and reopens durable data", () => {
+  it("uses WAL, migration version 3 and reopens durable data", () => {
     expect(store.db.prepare("PRAGMA journal_mode").get()?.journal_mode).toBe("wal");
-    expect(store.db.prepare("PRAGMA user_version").get()?.user_version).toBe(2);
+    expect(store.db.prepare("PRAGMA user_version").get()?.user_version).toBe(3);
     store.setCodexThreadId(comment.reviewId, "thread");
     store.setQuestions(comment.id, [{ id: "q", text: "Welcher Bereich?", answer: "Filter" }]);
     store.close(); store = new Store(dir);
@@ -31,9 +31,9 @@ describe("SQLite persistence and transactions", () => {
 
   it("migrates a version 1 database without losing comments or operations", () => {
     const op = store.insertOp({ commentId: comment.id, revision: 1, kind: "create_card" });
-    store.db.exec("DROP INDEX comments_client_request; ALTER TABLE comments DROP COLUMN client_request_id; PRAGMA user_version = 1;");
+    store.db.exec("DROP TABLE processing_records; DROP INDEX comments_client_request; ALTER TABLE comments DROP COLUMN client_request_id; PRAGMA user_version = 1;");
     store.close(); store = new Store(dir);
-    expect(store.db.prepare("PRAGMA user_version").get()?.user_version).toBe(2);
+    expect(store.db.prepare("PRAGMA user_version").get()?.user_version).toBe(3);
     expect(store.getComment(comment.id)).toEqual(comment);
     expect(store.getOp(op.id)).toEqual(op);
   });

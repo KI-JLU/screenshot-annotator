@@ -6,7 +6,7 @@ export function migrate(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");
   try {
     const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-    if (version > 2) throw new Error("Datenbankversion wird nicht unterstützt");
+    if (version > 3) throw new Error("Datenbankversion wird nicht unterstützt");
     if (version === 0) db.exec(`
     CREATE TABLE projects (project_id TEXT PRIMARY KEY, config_json TEXT NOT NULL);
     CREATE TABLE checkouts (
@@ -47,6 +47,13 @@ export function migrate(db: DatabaseSync): void {
       CREATE UNIQUE INDEX comments_client_request ON comments(review_id, client_request_id)
         WHERE client_request_id IS NOT NULL;
       PRAGMA user_version = 2;`);
+    if (version < 3) db.exec(`
+      CREATE TABLE processing_records (
+        comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+        namespace TEXT NOT NULL, data_json TEXT NOT NULL,
+        PRIMARY KEY (comment_id, namespace)
+      );
+      PRAGMA user_version = 3;`);
     db.exec("COMMIT");
   } catch (error) { db.exec("ROLLBACK"); throw error; }
 }

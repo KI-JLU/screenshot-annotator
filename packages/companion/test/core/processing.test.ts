@@ -53,14 +53,14 @@ describe("processing service seam", () => {
     expect(processing.retry).not.toHaveBeenCalled();
   });
 
-  it("runs without a processing implementation and returns a German 501 error", async () => {
+  it("uses real processing by default and reports missing prerequisites", async () => {
     const stub = await fixture();
     try {
       await stub.pair(); await stub.request("POST", "/v1/projects", config());
       const review = await (await stub.request("POST", "/v1/reviews", { projectId: "example" })).json() as ReviewDetail;
       const response = await stub.request("POST", `/v1/reviews/${review.id}/process`);
-      expect(response.status).toBe(501);
-      expect(await response.json()).toEqual({ error: { code: "internal", message: "Verarbeitung noch nicht implementiert" } });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: { code: "preflight_failed", details: expect.arrayContaining([{ kind: "checkout", message: "frontend: Checkout fehlt" }]) } });
     } finally { await stub.close(); }
   });
 });

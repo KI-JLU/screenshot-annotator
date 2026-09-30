@@ -16,7 +16,7 @@ export function authenticateExtension(req: IncomingMessage, store: Store): void 
   if (!pairing || !matchesHash(token, pairing.tokenHash)) {
     throw new HttpError(401, "unauthorized", "Kopplung mit dem Begleitdienst erforderlich");
   }
-  if (req.headers.origin !== pairing.extensionOrigin) throw new HttpError(403, "forbidden_origin", "Extension ist nicht gekoppelt");
+  if (req.headers.origin !== undefined && req.headers.origin !== pairing.extensionOrigin) throw new HttpError(403, "forbidden_origin", "Extension ist nicht gekoppelt");
 }
 export function authenticateInternal(req: IncomingMessage, internalTokenHash: string): void {
   if (!matchesHash(bearer(req), internalTokenHash)) throw new HttpError(401, "unauthorized", "Interner Zugang ungültig");

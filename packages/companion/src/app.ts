@@ -20,6 +20,10 @@ import { kanProblem, ProjectsService, type KanClientFactory } from "./projects/p
 import { normalizeBaseUrl, Secrets } from "./secrets/secrets.ts";
 import { Store } from "./store/store.ts";
 import { z } from "zod";
+import { createAnalysisRunner } from "./codex/analysisRunner.ts";
+import type { AnalysisRunner } from "./codex/types.ts";
+import { ReviewProcessingService } from "./processing/service.ts";
+import { registerGatewayHandlers } from "./mcp/gateway.ts";
 
 type MaybePromise<T> = T | Promise<T>;
 export interface ProcessingService {
@@ -29,12 +33,9 @@ export interface ProcessingService {
   retry(commentId: string): MaybePromise<Comment>;
   reconcile(commentId: string, req: ReconcileRequest): MaybePromise<Comment>;
   preflight(reviewId: string): MaybePromise<PreflightProblem[]>;
+  resume?(): Promise<void>;
+  close?(): Promise<void>;
 }
-const notImplemented = (): never => { throw new HttpError(501, "internal", "Verarbeitung noch nicht implementiert"); };
-export const stubProcessing: ProcessingService = {
-  processReview: notImplemented, answer: notImplemented, decide: notImplemented,
-  retry: notImplemented, reconcile: notImplemented, preflight: notImplemented,
-};
 
 export interface AppOptions {
   dataDir?: string;
@@ -42,6 +43,8 @@ export interface AppOptions {
   port?: number;
   kanClientFactory: KanClientFactory;
   processing?: ProcessingService;
+  analysisRunner?: AnalysisRunner;
+  cliPath?: string;
 }
 
 const VERSION = "0.1.0";
@@ -53,10 +56,21 @@ export function createApp(options: AppOptions) {
   const events = new EventBus();
   const secrets = new Secrets(options.configDir ?? paths.configDir);
   const store = new Store(options.dataDir ?? paths.dataDir, events);
-  const projects = new ProjectsService(store, secrets, options.kanClientFactory);
+  // Share the Kan client's request queue across processing and gateway reads.
+  const clients = new Map<string, { token: string; client: ReturnType<KanClientFactory> }>();
+  const projects = new ProjectsService(store, secrets, (input) => {
+    const cached = clients.get(input.baseUrl);
+    if (cached?.token === input.apiToken) return cached.client;
+    const client = options.kanClientFactory(input);
+    clients.set(input.baseUrl, { token: input.apiToken, client });
+    return client;
+  });
   const comments = new CommentsService(store);
-  const processing = options.processing ?? stubProcessing;
   const internalToken = randomToken();
+  const runner = options.analysisRunner ?? createAnalysisRunner();
+  let companionUrl = `http://127.0.0.1:${port}`;
+  const processing = options.processing ?? new ReviewProcessingService({ store, projects, runner, internalToken,
+    companionUrl: () => companionUrl, cliPath: options.cliPath });
   const internalTokenHash = hashSecret(internalToken);
   const router = new Router();
   const streams = new Set<() => void>();
@@ -74,8 +88,7 @@ export function createApp(options: AppOptions) {
     for (const close of streams) close();
     return { token };
   });
-  router.register("GET", "/v1/status", () => ({ version: VERSION,
-    codex: { available: false, problem: "Codex-Anbindung noch nicht eingerichtet" } }));
+  router.register("GET", "/v1/status", async () => ({ version: VERSION, codex: await runner.probe() }));
 
   router.register("GET", "/v1/projects", () => projects.list());
   router.register("POST", "/v1/projects", async (ctx) => projects.create(await ctx.json(z.unknown())));
@@ -138,7 +151,7 @@ export function createApp(options: AppOptions) {
   router.register("DELETE", "/v1/reviews/:reviewId", (ctx) => store.deleteReview(ctx.params.reviewId!));
   router.register("POST", "/v1/reviews/:reviewId/process", async (ctx) => {
     const id = ctx.params.reviewId!; requireReview(id);
-    const problems = await processing.preflight(id);
+    const problems = options.processing ? await processing.preflight(id) : [];
     if (problems.length) throw new HttpError(409, "preflight_failed", "Verarbeitung nicht möglich: Voraussetzungen fehlen", problems);
     return processing.processReview(id);
   });
@@ -217,7 +230,7 @@ export function createApp(options: AppOptions) {
   server.requestTimeout = 30_000;
   server.headersTimeout = 15_000;
 
-  return {
+  const app = {
     store, secrets, projects, events, comments, processing, internalToken, server,
     registerInternal(method: string, path: string, handler: Handler): void {
       if (!path.startsWith("/internal/")) throw new Error("Interne Route muss mit /internal/ beginnen");
@@ -232,7 +245,8 @@ export function createApp(options: AppOptions) {
         server.listen(port, "127.0.0.1", () => {
           server.off("error", failed);
           const address = server.address() as AddressInfo;
-          resolve({ port: address.port, url: `http://127.0.0.1:${address.port}` });
+          companionUrl = `http://127.0.0.1:${address.port}`;
+          Promise.resolve(processing.resume?.()).then(() => resolve({ port: address.port, url: companionUrl }), reject);
         });
       });
       return starting;
@@ -248,9 +262,13 @@ export function createApp(options: AppOptions) {
           server.closeAllConnections();
         });
       }
+      await processing.close?.();
+      if (options.processing) await runner.close();
       store.close();
     },
   };
+  registerGatewayHandlers(app.registerInternal, store, projects);
+  return app;
 }
 
 export type CompanionApp = ReturnType<typeof createApp>;

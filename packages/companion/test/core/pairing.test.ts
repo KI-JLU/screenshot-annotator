@@ -37,7 +37,7 @@ describe("pairing and HTTP authentication", () => {
       expect(response.headers.get("access-control-allow-origin")).toBeNull();
     }
     const missing = await fetch(f.url + "/v1/projects", { headers: { Authorization: `Bearer ${token}` } });
-    expect(missing.status).toBe(403);
+    expect(missing.status).toBe(200);
     expect((await f.request("GET", "/v1/projects", undefined, { Authorization: "Bearer invalid" })).status).toBe(401);
   });
 

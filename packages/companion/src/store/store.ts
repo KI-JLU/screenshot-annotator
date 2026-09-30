@@ -226,6 +226,18 @@ export class Store {
     const path = this.db.prepare("SELECT image_path FROM comments WHERE id = ?").get(id)?.image_path;
     return path == null ? undefined : String(path);
   }
+  getProcessingRecord<T>(commentId: string, namespace: string): T | undefined {
+    return parse<T>(this.db.prepare("SELECT data_json FROM processing_records WHERE comment_id = ? AND namespace = ?")
+      .get(commentId, namespace)?.data_json);
+  }
+  setProcessingRecord(commentId: string, namespace: string, data: unknown): void {
+    this.db.prepare(`INSERT INTO processing_records VALUES (?, ?, ?)
+      ON CONFLICT(comment_id, namespace) DO UPDATE SET data_json = excluded.data_json`)
+      .run(commentId, namespace, JSON.stringify(data));
+  }
+  deleteProcessingRecords(commentId: string): void {
+    this.db.prepare("DELETE FROM processing_records WHERE comment_id = ?").run(commentId);
+  }
   imagePath(id: string, revision: number): string {
     if (!/^[a-zA-Z0-9_-]+$/.test(id) || !Number.isSafeInteger(revision) || revision < 1) throw new Error("Ungültige Bildreferenz");
     return join(this.imagesDir, `${id}-r${revision}.png`);
