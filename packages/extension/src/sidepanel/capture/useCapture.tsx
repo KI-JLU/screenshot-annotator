@@ -153,6 +153,15 @@ export function CaptureProvider({ children }: { children: ComponentChildren }) {
         });
         return;
       }
+      // The project was matched for tab.url; refuse if the tab moved on in the meantime.
+      const [current] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+      if (!current || current.id !== tab.id || (current.url ?? "") !== tab.url) {
+        setError({
+          message: "Die aktive Seite hat sich geändert. Bitte warten, bis das Projekt zugeordnet ist, und erneut markieren.",
+          permissionProblem: false,
+        });
+        return;
+      }
       if (markingRef.current) cancel();
       const prev = draftRef.current;
       const next: CommentDraft =

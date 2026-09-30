@@ -43,6 +43,12 @@ describe("German ticket rendering", () => {
     expect(body).toContain("Lokaler Code wurde untersucht.");
     expect(body).toContain("Übereinstimmung mit dem deployten Stand ist nicht geprüft.");
   });
+  it("renders a single line without a redundant range", () => {
+    const data = input();
+    data.analysis.findings = [{ repository: "frontend", path: "page.ts", lineStart: 5, lineEnd: 5, note: "Fundstelle" }];
+    expect(renderCardDescription(data)).toContain("`page.ts:5` – Fundstelle");
+    expect(renderAppendComment(data)).toContain("`page.ts:5` – Fundstelle");
+  });
   it("does not invent missing line numbers or branch names", () => {
     const data = input();
     data.analysis.findings = [{ repository: "frontend", path: "page.ts", note: "Fundstelle" }];

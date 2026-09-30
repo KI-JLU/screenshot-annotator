@@ -86,7 +86,7 @@ describe("analysis runner", () => {
   it.each(["normal", "legacy", "completion-items"])("analyzes end to end (%s), including early events and protocol assertions in the fixture", async (mode) => {
     const { runner: analysis, client: transport } = runner(mode);
     const result = await analysis.analyze(input());
-    expect(result).toMatchObject({ ok: true, threadId: "thread-1", output: { outcome: "ready", ticket: { title: "Mehr Abstand" } } });
+    expect(result).toMatchObject({ ok: true, threadId: "thread-1", output: { duplicateCheck: "done", outcome: "ready", ticket: { title: "Mehr Abstand" } } });
     const transcript = await transport.request<Transcript>("inspect");
     expect(transcript.transcript.find((entry) => entry.method === "turn/start")?.params?.outputSchema).toEqual(analysisOutputJsonSchema);
     expect(transport.listenerCount("notification")).toBe(0);
@@ -150,7 +150,15 @@ describe("analysis runner", () => {
 });
 
 describe("analysis schema", () => {
-  const valid = () => ({ outcome: "ready", ticket: { title: "Titel", desiredChange: "Wunsch", openPoints: [], implementationIdeas: [] }, findings: [], questions: [], duplicates: [], mergeWith: [] });
+  const valid = () => ({ duplicateCheck: "done", outcome: "ready", ticket: { title: "Titel", desiredChange: "Wunsch", openPoints: [], implementationIdeas: [] }, findings: [], questions: [], duplicates: [], mergeWith: [] });
+  it("requires an explicit duplicate check result in both schemas", () => {
+    for (const duplicateCheck of [undefined, "unknown"]) {
+      expect(AnalysisOutputSchema.safeParse({ ...valid(), duplicateCheck }).success).toBe(false);
+    }
+    expect(AnalysisOutputSchema.safeParse({ ...valid(), duplicateCheck: "failed" }).success).toBe(true);
+    expect(analysisOutputJsonSchema.required).toContain("duplicateCheck");
+    expect(analysisOutputJsonSchema.properties.duplicateCheck.enum).toEqual(["done", "failed"]);
+  });
   it("enforces both iff rules in both directions", () => {
     expect(AnalysisOutputSchema.safeParse(valid()).success).toBe(true);
     for (const value of [

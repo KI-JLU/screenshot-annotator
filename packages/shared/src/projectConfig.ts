@@ -6,7 +6,7 @@ export const UrlRuleSchema = z.object({
   hostname: z.string().min(1).transform((h) => h.toLowerCase()),
   port: z.number().int().min(1).max(65535).optional(),
   pathPrefix: z.string().startsWith("/").default("/"),
-});
+}).strict();
 export type UrlRule = z.infer<typeof UrlRuleSchema>;
 
 export const KanTargetSchema = z.object({
@@ -15,7 +15,7 @@ export const KanTargetSchema = z.object({
   workspacePublicId: z.string().min(1),
   boardPublicId: z.string().min(1),
   listPublicId: z.string().min(1),
-});
+}).strict();
 export type KanTarget = z.infer<typeof KanTargetSchema>;
 
 const AliasSchema = z

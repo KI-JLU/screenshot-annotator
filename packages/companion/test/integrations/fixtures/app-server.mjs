@@ -15,7 +15,7 @@ const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const notify = (method, params) => send({ method, params });
 const approvalMethods = ["item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval", "applyPatchApproval", "execCommandApproval", "mcpServer/elicitation/request", "unknown/request"];
 const output = {
-  outcome: "ready", ticket: { title: "Mehr Abstand", desiredChange: "Abstand vergrößern.", openPoints: [], implementationIdeas: [] },
+  duplicateCheck: "done", outcome: "ready", ticket: { title: "Mehr Abstand", desiredChange: "Abstand vergrößern.", openPoints: [], implementationIdeas: [] },
   findings: [{ repository: "frontend", path: "src/page.ts", lineStart: null, lineEnd: null, note: "Filterbereich" }],
   questions: [], duplicates: [], mergeWith: [],
 };
@@ -69,7 +69,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       case "turn/interrupt": respond({}); break;
       case "turn/start": {
         assert.equal(params.outputSchema.additionalProperties, false);
-        assert.deepEqual(params.outputSchema.required, ["outcome", "ticket", "findings", "questions", "duplicates", "mergeWith"]);
+        assert.deepEqual(params.outputSchema.required, ["duplicateCheck", "outcome", "ticket", "findings", "questions", "duplicates", "mergeWith"]);
         assert.deepEqual(params.outputSchema.properties.findings.items.properties.lineStart.type, ["number", "null"]);
         assert.equal(params.input[0].type, "text");
         assert.deepEqual(params.input[0].text_elements, []);

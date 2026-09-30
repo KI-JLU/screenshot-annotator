@@ -10,7 +10,7 @@ import { KanError, type KanCardDetail, type KanClient, type KanCreateCardInput, 
 import { ReviewProcessingService } from "../../src/processing/service.ts";
 import { config, commentInput, ORIGIN } from "../core/helpers.ts";
 
-export const ready = (): AnalysisOutput => ({ outcome: "ready", ticket: { title: "Mehr Luft", desiredChange: "Mehr Abstand im Filterbereich", implementationIdeas: [], openPoints: [] }, findings: [], questions: [], duplicates: [], mergeWith: [] });
+export const ready = (): AnalysisOutput => ({ duplicateCheck: "done", outcome: "ready", ticket: { title: "Mehr Luft", desiredChange: "Mehr Abstand im Filterbereich", implementationIdeas: [], openPoints: [] }, findings: [], questions: [], duplicates: [], mergeWith: [] });
 export class MemoryKan implements KanClient {
   readonly baseUrl = "https://kan.example";
   readonly cards = new Map<string, KanCardDetail>();

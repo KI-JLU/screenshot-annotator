@@ -13,6 +13,7 @@
  */
 import type { CaptureContext, MarkKind, Point, Rect } from "@website-review/shared";
 import type { ContentToWorker, OverlaySelection, WorkerToContent } from "../lib/messages.ts";
+import { isSensitiveField } from "../lib/sensitive.ts";
 
 interface OverlayApi {
   start(mode: MarkKind): void;
@@ -37,12 +38,37 @@ function capText(text: string, max: number): string {
   return text.slice(0, max - 1).trimEnd() + "…";
 }
 
+type FormField = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+
+function isFormField(el: Element): el is FormField {
+  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement;
+}
+
+/** Password, hidden, credential/one-time-code and payment fields: their values never leave the page. */
+function isSensitive(el: FormField): boolean {
+  return isSensitiveField({
+    tagName: el.tagName,
+    type: el instanceof HTMLInputElement ? el.type : undefined,
+    autocomplete: el.getAttribute("autocomplete"),
+  });
+}
+
+/** Describes a field without its value: aria-label, placeholder or the associated <label> text. */
+function fieldLabel(el: FormField): string {
+  const labelText = el.labels?.[0] ? collapse(el.labels[0].innerText || el.labels[0].textContent) : "";
+  return collapse(
+    el.getAttribute("aria-label") ||
+      (el instanceof HTMLSelectElement ? "" : el.placeholder) ||
+      labelText ||
+      el.getAttribute("title"),
+  );
+}
+
 function visibleText(el: Element): string {
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    return collapse(el.value || el.placeholder || el.getAttribute("aria-label"));
-  }
-  if (el instanceof HTMLSelectElement) {
-    return collapse(el.selectedOptions[0]?.textContent);
+  if (isFormField(el)) {
+    if (isSensitive(el)) return fieldLabel(el);
+    if (el instanceof HTMLSelectElement) return collapse(el.selectedOptions[0]?.textContent) || fieldLabel(el);
+    return collapse(el.value) || fieldLabel(el);
   }
   if (el instanceof HTMLImageElement) return collapse(el.alt || el.title);
   const text = el instanceof HTMLElement ? el.innerText : el.textContent;
@@ -59,13 +85,10 @@ function describeElement(el: Element): string {
   if (el.id && el.id.length <= 40) desc += `#${cssIdent(el.id)}`;
   const classes = [...el.classList].filter((c) => c.length <= 40).slice(0, 2);
   for (const c of classes) desc += `.${cssIdent(c)}`;
-  const label = collapse(
-    el.getAttribute("aria-label") ||
-      el.getAttribute("alt") ||
-      el.getAttribute("title") ||
-      el.getAttribute("placeholder") ||
-      visibleText(el),
-  );
+  // Form fields are labelled by their label texts only, never by their value (see isSensitive).
+  const label = isFormField(el)
+    ? fieldLabel(el)
+    : collapse(el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title") || visibleText(el));
   if (label) desc += ` „${capText(label, 60)}“`;
   return desc;
 }

@@ -205,7 +205,7 @@ export class Store {
   deleteReview(id: string): void {
     if (!this.getReview(id)) notFound("Review");
     this.transaction(() => {
-      for (const comment of this.listComments(id)) this.deleteComment(comment.id);
+      for (const comment of this.listComments(id)) this.removeComment(comment);
       this.db.prepare("DELETE FROM reviews WHERE id = ?").run(id);
       this.emit({ type: "review.updated", reviewId: id });
     });
@@ -284,28 +284,42 @@ export class Store {
   setPendingDecision(id: string, pendingDecision?: PendingDecision): Comment { return this.updateComment(id, { pendingDecision }); }
   setTicket(id: string, ticket?: TicketLink): Comment { return this.updateComment(id, { ticket }); }
   deleteComment(id: string): void {
-    const comment = this.getComment(id);
-    if (!comment) notFound("Kommentar");
     this.transaction(() => {
-      // Remove proposals mentioning the deleted comment so a future decision cannot target it.
-      for (const proposal of this.listMergeProposals(comment.reviewId)) {
-        if (!proposal.commentIds.includes(id)) continue;
-        this.db.prepare("DELETE FROM merge_proposals WHERE id = ?").run(proposal.id);
+      const comment = this.getComment(id);
+      if (!comment) notFound("Kommentar");
+      if (["processing", "publishing", "ticket_created", "outcome_unclear"].includes(comment.state)) {
+        conflict("Kommentar wird verarbeitet oder veröffentlicht – zuerst den Vorgang abschließen");
+      }
+      const proposals = this.listMergeProposals(comment.reviewId).filter((p) => p.commentIds.includes(id) && p.status !== "rejected");
+      const group = comment.mergeGroupId ? this.listComments(comment.reviewId).filter((c) => c.mergeGroupId === comment.mergeGroupId) : [];
+      if (group.some((member) => member.state !== "published") ||
+        proposals.some((p) => p.status === "accepted" && p.commentIds.some((memberId) => this.getComment(memberId)?.state !== "published"))) {
+        conflict("Zusammengefasste Kommentare können erst nach vollständiger Veröffentlichung einzeln gelöscht werden");
+      }
+      for (const proposal of proposals) {
+        // Keep rejected proposals as decisions; accepted groups can only be dissolved after publication.
+        if (proposal.status === "open") this.updateMergeProposal(proposal.id, "rejected");
+        else this.db.prepare("DELETE FROM merge_proposals WHERE id = ?").run(proposal.id);
         for (const otherId of proposal.commentIds.filter((c) => c !== id)) {
           const other = this.getComment(otherId);
-          if (other?.pendingDecision?.kind === "merge" && other.pendingDecision.proposalId === proposal.id) {
-            this.updateComment(otherId, { pendingDecision: undefined, ...(other.state === "decision_open" ? { state: "draft" } : {}) });
+          if (other) {
+            this.updateComment(otherId, { mergeGroupId: undefined,
+              ...(other.pendingDecision?.kind === "merge" && other.pendingDecision.proposalId === proposal.id
+                ? { pendingDecision: undefined, state: "draft", stateDetail: undefined } : {}) });
           }
         }
       }
-      this.db.prepare("DELETE FROM comments WHERE id = ?").run(id);
-      this.afterCommit(() => {
-        for (const file of readdirSync(this.imagesDir)) {
-          if (file.startsWith(`${id}-r`) && /^.+-r\d+\.png$/.test(file)) rmSync(join(this.imagesDir, file), { force: true });
-        }
-      });
-      this.commentChanged(comment);
+      this.removeComment(comment);
     });
+  }
+  private removeComment(comment: Comment): void {
+    this.db.prepare("DELETE FROM comments WHERE id = ?").run(comment.id);
+    this.afterCommit(() => {
+      for (const file of readdirSync(this.imagesDir)) {
+        if (file.startsWith(`${comment.id}-r`) && /^.+-r\d+\.png$/.test(file)) rmSync(join(this.imagesDir, file), { force: true });
+      }
+    });
+    this.commentChanged(comment);
   }
 
   listMergeProposals(reviewId: string): MergeProposal[] {

@@ -176,17 +176,26 @@ export function buildScreenshotMeta(input: { original: Size; crop: Rect } & Mark
     originalHeight: input.original.height,
     crop,
   };
+  const finalBounds = fullRect(crop);
   let markerInside = true;
   if (input.marker) {
+    // Outside detection uses the exact position; the clamp below only absorbs rounding.
     markerInside = pointInRect(input.marker, crop);
     if (markerInside) {
       const m = pointToCrop(input.marker, crop);
-      meta.marker = { x: Math.round(m.x), y: Math.round(m.y) };
+      // Integer pixel inside the final image: x in [0, width-1], y in [0, height-1].
+      const final = {
+        x: clamp(Math.round(m.x), 0, crop.width - 1),
+        y: clamp(Math.round(m.y), 0, crop.height - 1),
+      };
+      markerInside = pointInRect(final, finalBounds);
+      if (markerInside) meta.marker = final;
     }
   }
   if (input.elementBox && markerInside) {
     const box = rectToCrop(input.elementBox, crop);
-    if (box) meta.elementBox = roundRect(box);
+    const rounded = box ? intersectRects(roundRect(box), finalBounds) : null;
+    if (rounded) meta.elementBox = rounded;
   }
   return { meta, markerInside };
 }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const AnalysisOutputSchema = z.object({
+  duplicateCheck: z.enum(["done", "failed"]),
   outcome: z.enum(["ready", "question", "duplicate"]),
   ticket: z.object({
     title: z.string(), desiredChange: z.string(), openPoints: z.array(z.string()), implementationIdeas: z.array(z.string()),
@@ -22,8 +23,9 @@ export const AnalysisOutputSchema = z.object({
 
 export const analysisOutputJsonSchema = {
   type: "object", additionalProperties: false,
-  required: ["outcome", "ticket", "findings", "questions", "duplicates", "mergeWith"],
+  required: ["duplicateCheck", "outcome", "ticket", "findings", "questions", "duplicates", "mergeWith"],
   properties: {
+    duplicateCheck: { type: "string", enum: ["done", "failed"] },
     outcome: { type: "string", enum: ["ready", "question", "duplicate"] },
     ticket: {
       type: "object", additionalProperties: false,

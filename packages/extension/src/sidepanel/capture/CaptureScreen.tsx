@@ -1,6 +1,7 @@
 /** Preview, crop and comment form for a fresh capture; saves the comment to the companion. */
 import { useEffect, useId, useMemo, useState } from "preact/hooks";
 import type { CreateCommentRequest, MarkKind, Rect } from "@website-review/shared";
+import { urlMatchesRule } from "@website-review/shared";
 import { buildScreenshotMeta, cssToImageScale, fullRect, markGeometryFromCss, type Size } from "../../lib/geometry.ts";
 import { blobToBase64, renderFinalPng } from "../../lib/render.ts";
 import { MARK_KIND_LABELS } from "../../lib/format.ts";
@@ -47,7 +48,10 @@ export function CaptureScreen({ tab }: { tab: ActiveTab | null }) {
     image && crop && geometry ? buildScreenshotMeta({ original: image, crop, ...geometry.marks }) : null;
   const markerInside = metaResult?.markerInside ?? true;
   const textMissing = draft.text.trim() === "";
-  const canSubmit = !!capture && !textMissing && (!attach || (!!metaResult && markerInside)) && !action.busy;
+  // Never file feedback from one page into another project's Kan target.
+  const urlFits = !!capture && !!project && project.config.urlRules.some((r) => urlMatchesRule(capture.context.url, r));
+  const canSubmit =
+    !!capture && urlFits && !textMissing && (!attach || (!!metaResult && markerInside)) && !action.busy;
 
   const submit = (e: Event) => {
     e.preventDefault();
@@ -95,7 +99,11 @@ export function CaptureScreen({ tab }: { tab: ActiveTab | null }) {
   const submitHintId = `${id}-submit-hint`;
   const submitHint = !capture
     ? "Der Screenshot ist nicht mehr vorhanden. Bitte neu aufnehmen; der Text bleibt erhalten."
-    : textMissing
+    : !project
+      ? "Projekt wird geladen …"
+      : !urlFits
+        ? `Die erfasste Seite gehört nicht zum Projekt „${project.config.name}“. Bitte auf einer Seite dieses Projekts neu aufnehmen.`
+        : textMissing
       ? "Bitte einen Kommentar eingeben."
       : attach && !markerInside
         ? "Die Markierung liegt außerhalb des Ausschnitts."

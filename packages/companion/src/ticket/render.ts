@@ -46,7 +46,7 @@ function render(input: RenderCardInput, prefix: string): string {
   if (findings.length) {
     const lines = findings.map((finding) => {
       const location = finding.lineStart == null ? finding.path
-        : `${finding.path}:${finding.lineStart}${finding.lineEnd == null ? "" : `-${finding.lineEnd}`}`;
+        : `${finding.path}:${finding.lineStart}${finding.lineEnd == null || finding.lineEnd === finding.lineStart ? "" : `-${finding.lineEnd}`}`;
       return `- \`${finding.repository}\`: \`${location}\` – ${finding.note}`;
     });
     parts.push(`### Code-Fundstellen (lokal untersucht)\n${lines.join("\n")}`);

@@ -186,6 +186,35 @@ describe("buildScreenshotMeta", () => {
     expect(meta.elementBox).toBeUndefined();
   });
 
+  it("keeps a rounded marker inside a tiny crop (rounding edge)", () => {
+    // 9.75 is inside [0, 10) but would round to 10 == width, which the companion rejects.
+    const { meta, markerInside } = buildScreenshotMeta({
+      original,
+      crop: { x: 100, y: 200, width: 10, height: 10 },
+      marker: { x: 109.75, y: 209.6 },
+      elementBox: { x: 95.4, y: 195.4, width: 15.2, height: 15.2 },
+    });
+    expect(markerInside).toBe(true);
+    expect(meta.marker).toEqual({ x: 9, y: 9 });
+    const box = meta.elementBox;
+    expect(box).toBeDefined();
+    if (!box) return;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(meta.width);
+    expect(box.y + box.height).toBeLessThanOrEqual(meta.height);
+  });
+
+  it("still rejects a marker exactly on the right/bottom crop edge", () => {
+    const { meta, markerInside } = buildScreenshotMeta({
+      original,
+      crop: { x: 100, y: 200, width: 10, height: 10 },
+      marker: { x: 110, y: 205 },
+    });
+    expect(markerInside).toBe(false);
+    expect(meta.marker).toBeUndefined();
+  });
+
   it("allows any crop for page comments", () => {
     const { meta, markerInside } = buildScreenshotMeta({ original, crop: { x: 10, y: 10, width: 100, height: 100 } });
     expect(markerInside).toBe(true);

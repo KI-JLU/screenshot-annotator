@@ -32,6 +32,7 @@ export interface ProcessingOptions {
 export class ReviewProcessingService implements ProcessingService {
   readonly publisher: Publisher;
   private readonly queues = new Map<string, Promise<void>>();
+  private readonly publishQueues = new Map<string, Promise<void>>();
   private readonly scheduled = new Set<string>();
   private readonly abort = new AbortController();
   private stopped = false;
@@ -74,7 +75,8 @@ export class ReviewProcessingService implements ProcessingService {
     const key = `${comment.id}:${comment.revision}:${phase}`;
     if (this.scheduled.has(key)) return;
     this.scheduled.add(key);
-    const previous = this.queues.get(comment.reviewId) ?? Promise.resolve();
+    const queues = phase === "publish" ? this.publishQueues : this.queues;
+    const previous = queues.get(comment.reviewId) ?? Promise.resolve();
     const next = previous.then(async () => {
       if (this.stopped) return;
       try { await action(); }
@@ -86,9 +88,9 @@ export class ReviewProcessingService implements ProcessingService {
       }
     }).finally(() => {
       this.scheduled.delete(key);
-      if (this.queues.get(comment.reviewId) === next) this.queues.delete(comment.reviewId);
+      if (queues.get(comment.reviewId) === next) queues.delete(comment.reviewId);
     });
-    this.queues.set(comment.reviewId, next);
+    queues.set(comment.reviewId, next);
   }
   async processReview(reviewId: string): Promise<{ started: string[] }> {
     const checked = await this.check(reviewId); this.requireCheck(checked);
@@ -109,7 +111,7 @@ export class ReviewProcessingService implements ProcessingService {
       const project = this.options.projects.config(this.store.getReview(primary.reviewId)!.projectId);
       this.publisher.prepare(comments.map((c) => this.comment(c.id)), project.target);
       await this.publisher.publish(primary.id);
-    });
+    }, "publish");
   }
   private unchanged(comments: Comment[]): boolean {
     if (comments.every((c) => this.store.getComment(c.id)?.revision === c.revision)) return true;
@@ -154,6 +156,11 @@ export class ReviewProcessingService implements ProcessingService {
       return;
     }
     const output = AnalysisOutputSchema.parse(result.output);
+    if (output.duplicateCheck === "failed") {
+      for (const c of snapshots) this.store.updateComment(c.id, { state: "failed", analysis: undefined,
+        stateDetail: "Duplikatprüfung in Kan fehlgeschlagen – bitte erneut versuchen" });
+      return;
+    }
     const findings: CodeFinding[] = [];
     for (const finding of output.findings) {
       const checkout = record.checkouts.find((c) => c.alias === finding.repository);
@@ -187,7 +194,7 @@ export class ReviewProcessingService implements ProcessingService {
     if (this.comment(primary.id).pendingDecision?.kind === "merge") return;
     if (snapshots.length === 1 && !primary.mergeGroupId && output.mergeWith.length) {
       const others = output.mergeWith.map((m) => this.store.getComment(m.commentId)).filter((c): c is Comment =>
-        !!c && c.id !== primary.id && c.reviewId === primary.reviewId && !c.ticket && !c.mergeGroupId &&
+        !!c && c.id !== primary.id && c.reviewId === primary.reviewId && !c.ticket && !c.mergeGroupId && !this.publisher.plan(c.id) &&
         ["draft", "processing", "question_open", "decision_open", "ready", "failed"].includes(c.state) && c.pendingDecision?.kind !== "merge" &&
         !this.store.listMergeProposals(primary.reviewId).some((p) => p.status === "rejected" && p.commentIds.includes(primary.id) && p.commentIds.includes(c.id)) &&
         !this.store.listOpsForComment(c.id).some((o) => o.state !== "failed"));
@@ -224,7 +231,7 @@ export class ReviewProcessingService implements ProcessingService {
       const project = this.options.projects.config(this.store.getReview(primary.reviewId)!.projectId);
       const current = comments.map((c) => this.store.updateComment(c.id, { state: "ready", pendingDecision: undefined, stateDetail: undefined }));
       this.publisher.prepare(current, project.target);
-      await this.publisher.publish(primary.id);
+      this.enqueue(primary, () => this.publisher.publish(primary.id), "publish");
     }
   }
   async answer(id: string, request: AnswerRequest): Promise<Comment> {
@@ -239,12 +246,20 @@ export class ReviewProcessingService implements ProcessingService {
     }
     if (group.every((m) => this.comment(m.id).questions.every((q) => q.answer !== undefined))) {
       const checked = await this.check(c.reviewId);
-      if (checked.problems.length) {
-        for (const member of group) this.store.updateComment(member.id, { state: "failed", analysis: undefined,
-          stateDetail: checked.problems.map((p) => p.message).join("; ") });
-        this.requireCheck(checked);
-      }
-      this.stage(group.map((m) => this.comment(m.id)), checked.view);
+      this.store.transaction(() => {
+        const proposal = c.mergeGroupId ? this.store.getMergeProposal(c.mergeGroupId) : undefined;
+        if (c.mergeGroupId && (!proposal || proposal.status !== "accepted" ||
+          proposal.commentIds.length !== group.length || proposal.commentIds.some((memberId, index) => memberId !== group[index]?.id))) return;
+        if (group.some((member) => {
+          const current = this.store.getComment(member.id);
+          return !current || current.revision !== member.revision || current.mergeGroupId !== member.mergeGroupId || current.state !== "question_open";
+        })) return;
+        if (checked.problems.length) {
+          for (const member of group) this.store.updateComment(member.id, { state: "failed", analysis: undefined,
+            stateDetail: checked.problems.map((p) => p.message).join("; ") });
+        } else this.stage(group.map((m) => this.comment(m.id)), checked.view);
+      });
+      this.requireCheck(checked);
     }
     return this.comment(id);
   }
@@ -261,7 +276,7 @@ export class ReviewProcessingService implements ProcessingService {
         this.publisher.prepare(group, project.target, candidate ? "appended" : "created", candidate?.cardPublicId, candidate?.title);
         for (const member of group) this.store.updateComment(member.id, { state: "ready", pendingDecision: undefined });
       });
-      this.enqueue(group[0]!, () => this.publisher.publish(group[0]!.id));
+      this.enqueue(group[0]!, () => this.publisher.publish(group[0]!.id), "publish");
     } else {
       if (c.pendingDecision.kind !== "merge" || c.pendingDecision.proposalId !== input.proposalId) conflict("Zusammenfassungsvorschlag passt nicht");
       const proposal = this.store.getMergeProposal(input.proposalId);
@@ -307,9 +322,9 @@ export class ReviewProcessingService implements ProcessingService {
         if (ops.some((op) => op.state === "sent")) {
           for (const op of ops.filter((o) => o.state === "sent")) this.store.markOp(op.id, "unclear", { error: "Dienst während Veröffentlichung beendet" });
           for (const member of group) this.store.updateCommentState(member.id, "outcome_unclear", "Dienst während Veröffentlichung beendet – Abgleich erforderlich");
-          this.enqueue(primary, async () => { await this.ensurePlan(group); await this.publisher.reconcile(primary.id, { action: "recheck" }); });
+          this.enqueue(primary, async () => { await this.ensurePlan(group); await this.publisher.reconcile(primary.id, { action: "recheck" }); }, "publish");
         } else if (["ready", "publishing", "ticket_created"].includes(primary.state)) {
-          this.enqueue(primary, async () => { await this.ensurePlan(group); await this.publisher.publish(primary.id); });
+          this.enqueue(primary, async () => { await this.ensurePlan(group); await this.publisher.publish(primary.id); }, "publish");
         } else if (primary.state === "processing") {
           const checked = await this.check(review.id);
           if (checked.problems.length) { for (const member of group) this.store.updateCommentState(member.id, "failed", checked.problems.map((p) => p.message).join("; ")); }
@@ -325,7 +340,9 @@ export class ReviewProcessingService implements ProcessingService {
     const op = this.store.listOpsForComment(primary.id, primary.revision).find((o) => o.kind === "add_comment" && o.state !== "failed");
     this.publisher.prepare(group, project.target, primary.ticket?.mode ?? (op ? "appended" : "created"), primary.ticket?.cardPublicId ?? op?.cardPublicId, primary.ticket?.title);
   }
-  async idle(): Promise<void> { while (this.queues.size) await Promise.all(this.queues.values()); }
+  async idle(): Promise<void> {
+    while (this.queues.size || this.publishQueues.size) await Promise.all([...this.queues.values(), ...this.publishQueues.values()]);
+  }
   async close(): Promise<void> {
     this.stopped = true; this.abort.abort(); await this.options.runner.close(); await this.idle();
   }

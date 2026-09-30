@@ -59,14 +59,36 @@ async function cancelCapture(tabId: number): Promise<void> {
   await chrome.tabs.sendMessage(tabId, msg).catch(() => undefined);
 }
 
+const TAB_CHANGED =
+  "Während der Aufnahme wurde ein anderer Tab aktiv. Der Screenshot passt nicht zur Markierung und wurde verworfen – bitte erneut markieren.";
+
+/** captureVisibleTab shoots the window's active tab, which must still be the tab the selection came from. */
+async function isActiveTab(windowId: number, tabId: number): Promise<boolean> {
+  try {
+    const [active] = await chrome.tabs.query({ active: true, windowId });
+    return active?.id === tabId;
+  } catch {
+    return false;
+  }
+}
+
 async function takeScreenshot(selection: OverlaySelection, tab: chrome.tabs.Tab | undefined): Promise<void> {
   if (!tab?.id || tab.windowId === undefined) {
     broadcast({ type: "capture/error", message: "Tab der Markierung nicht gefunden.", permissionProblem: false });
     return;
   }
+  if (!(await isActiveTab(tab.windowId, tab.id))) {
+    broadcast({ type: "capture/error", message: TAB_CHANGED, permissionProblem: false });
+    return;
+  }
   let dataUrl: string;
   try {
     dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    // The tab may have been switched while the capture was running.
+    if (!(await isActiveTab(tab.windowId, tab.id))) {
+      broadcast({ type: "capture/error", message: TAB_CHANGED, permissionProblem: false });
+      return;
+    }
   } catch (e) {
     const message = messageOf(e);
     const permissionProblem = isPermissionError(message);

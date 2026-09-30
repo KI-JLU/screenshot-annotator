@@ -45,6 +45,11 @@ describe("matchProjects", () => {
 });
 
 describe("ProjectConfigSchema", () => {
+  it("rejects nested tokens and local paths", () => {
+    const project = cfg("a", [{ scheme: "http", hostname: "x" }]);
+    expect(() => parseProjectConfig({ ...project, target: { ...project.target, apiToken: "secret" } })).toThrow();
+    expect(() => parseProjectConfig({ ...project, urlRules: [{ ...project.urlRules[0], localPath: "/private" }] })).toThrow();
+  });
   it("rejects unknown keys such as local paths or tokens", () => {
     expect(() =>
       parseProjectConfig({ ...cfg("a", [{ scheme: "http", hostname: "x" }]), apiToken: "secret" }),

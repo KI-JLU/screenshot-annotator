@@ -57,14 +57,24 @@ export class Publisher {
   private mirror(id: string, patch: CommentUpdate): void {
     const plan = this.plan(id);
     this.store.transaction(() => {
-      for (const member of plan?.comments ?? [this.store.getComment(id)!]) {
+      for (const member of plan?.comments ?? [this.store.getComment(id)].filter((c): c is Comment => !!c)) {
         const current = this.store.getComment(member.id);
         if (current?.revision === member.revision) this.store.updateComment(member.id, patch);
       }
     });
   }
   private current(id: string, plan: PublicationPlan): boolean {
-    return plan.comments.every((c) => this.store.getComment(c.id)?.revision === c.revision) && !!this.store.getComment(id);
+    if (plan.comments.every((c) => this.store.getComment(c.id)?.revision === c.revision) && this.store.getComment(id)) return true;
+    this.store.transaction(() => {
+      for (const member of plan.comments) {
+        const current = this.store.getComment(member.id);
+        if (current && current.state !== "published" && (current.revision === member.revision ||
+          ["ready", "publishing", "ticket_created"].includes(current.state))) {
+          this.store.updateCommentState(current.id, "failed", "Veröffentlichungsplan ist veraltet – Kommentare wurden geändert oder gelöscht");
+        }
+      }
+    });
+    return false;
   }
   private locked(id: string, action: () => Promise<void>): Promise<void> {
     const pending = this.running.get(id);
@@ -107,7 +117,7 @@ export class Publisher {
   }
   private async write(id: string, plan: PublicationPlan, client: KanClient, op: PublicationOp, call: () => Promise<{ cardPublicId?: string; externalId?: string }>): Promise<boolean> {
     if (op.state === "confirmed") return true;
-    if (op.state === "unclear") { this.mirror(id, { state: "outcome_unclear", stateDetail: op.error }); return false; }
+    if (op.state === "unclear") { this.mirror(id, { state: "outcome_unclear", stateDetail: op.error ?? "Ergebnis der Kan-Anfrage unklar – Abgleich erforderlich" }); return false; }
     if (op.state === "sent") {
       this.store.markOp(op.id, "unclear");
       this.mirror(id, { state: "outcome_unclear", stateDetail: "Veröffentlichung wurde unterbrochen – Ergebnis wird abgeglichen" });
@@ -118,14 +128,23 @@ export class Publisher {
       this.store.markOp(op.id, "sent");
       return true;
     });
-    if (!claimed) return false;
+    if (!claimed) {
+      if (this.current(id, plan)) this.mirror(id, { state: "failed", stateDetail: "Veröffentlichungsvorgang wurde inzwischen geändert – erneut versuchen" });
+      return false;
+    }
     try {
       const result = await call();
-      if (!this.store.getOp(op.id)) return false;
+      if (!this.store.getOp(op.id)) {
+        this.mirror(id, { state: "outcome_unclear", stateDetail: "Veröffentlichungsvorgang fehlt – Ergebnis der Kan-Anfrage unklar" });
+        return false;
+      }
       this.store.markOp(op.id, "confirmed", { ...result, error: undefined });
       return true;
     } catch (error) {
-      if (!this.store.getOp(op.id)) return false;
+      if (!this.store.getOp(op.id)) {
+        this.mirror(id, { state: "outcome_unclear", stateDetail: "Veröffentlichungsvorgang fehlt – Ergebnis der Kan-Anfrage unklar" });
+        return false;
+      }
       // An unexpected exception after calling the transport is also uncertain.
       const unclear = !(error instanceof KanError) || (error.requestSent && ["timeout", "network", "server"].includes(error.kind));
       const detail = unclear ? "Ergebnis der Kan-Anfrage unklar – Abgleich erforderlich" : publicationProblem(error);
@@ -136,7 +155,8 @@ export class Publisher {
   }
   private async run(id: string): Promise<void> {
     const plan = this.plan(id);
-    if (!plan || !this.current(id, plan)) return;
+    if (!plan) { this.mirror(id, { state: "failed", stateDetail: "Veröffentlichungsplan fehlt – erneut versuchen" }); return; }
+    if (!this.current(id, plan)) return;
     let client: KanClient;
     try { client = this.projects.client(plan.target.baseUrl); }
     catch { this.mirror(id, { state: "failed", stateDetail: "Kan-Zugang ungültig – Verbindung prüfen" }); return; }
@@ -149,7 +169,7 @@ export class Publisher {
     if (!cardId || op && op.state !== "confirmed") {
       if (!plan.analysis) { this.mirror(id, { state: "failed", stateDetail: "Aktuelle Codeanalyse fehlt" }); return; }
       op ??= this.intend(id, plan, kind, plan.cardPublicId);
-      if (op.state === "unclear") { this.mirror(id, { state: "outcome_unclear", stateDetail: op.error }); return; }
+      if (op.state === "unclear") { this.mirror(id, { state: "outcome_unclear", stateDetail: op.error ?? "Ergebnis der Kan-Anfrage unklar – Abgleich erforderlich" }); return; }
       const input = { comments: plan.comments, analysis: plan.analysis, reference: op.reference };
       let body: string;
       try { body = kind === "create_card" ? renderCardDescription(input) : renderAppendComment(input); }
@@ -162,7 +182,8 @@ export class Publisher {
       cardId = this.store.getOp(op.id)?.cardPublicId;
     }
     cardId ??= op?.cardPublicId;
-    if (!cardId || !this.current(id, plan)) return;
+    if (!this.current(id, plan)) return;
+    if (!cardId) { this.mirror(id, { state: "failed", stateDetail: "Kan-Kartenreferenz fehlt – erneut versuchen" }); return; }
     this.ticket(id, plan, cardId);
     for (const upload of plan.uploads) {
       let uploadOp = upload.opId ? this.store.getOp(upload.opId) : undefined;
@@ -189,9 +210,23 @@ export class Publisher {
       } else if (request.action === "confirm_exists") {
         const card = await client.getCard(request.cardPublicId);
         if (op.kind !== "create_card" && card.publicId !== op.cardPublicId) conflict("Die Karte gehört nicht zu diesem Vorgang");
-        if (op.kind === "upload_attachment") {
-          if (!await this.check(id, plan, client, op)) return;
+        if (op.kind !== "create_card") {
+          const found = await findWrite(client, plan.target.boardPublicId, op,
+            plan.uploads.find((upload) => upload.opId === op.id)?.filename ?? attachmentFilename(id, op.revision));
+          if (!found) {
+            const detail = op.kind === "add_comment"
+              ? "Der Kommentar mit der Review-Referenz wurde auf der Karte nicht gefunden"
+              : "Der Screenshot mit dem erwarteten Dateinamen wurde auf der Karte nicht gefunden";
+            this.store.markOp(op.id, "unclear", { error: detail });
+            this.mirror(id, { state: "outcome_unclear", stateDetail: detail });
+            conflict(detail);
+          }
+          this.store.markOp(op.id, "confirmed", { ...found, error: undefined });
         } else {
+          const board = await client.getBoard(plan.target.boardPublicId);
+          if (!board.lists.some((list) => list.cards.some((candidate) => candidate.publicId === card.publicId))) {
+            conflict("Die Karte befindet sich nicht auf dem Zielboard");
+          }
           plan.title = card.title; this.save(id, plan);
           this.store.markOp(op.id, "confirmed", { cardPublicId: card.publicId, error: undefined });
         }

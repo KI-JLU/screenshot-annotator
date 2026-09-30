@@ -42,5 +42,10 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(() => { console.error("Begleitdienst konnte nicht gestartet werden. Befehl, Port und lokale Einrichtung prüfen."); process.exitCode = 1; });
+  main().catch((error: unknown) => {
+    // Startup errors (port in use, invalid arguments, unreadable data dir) carry no secrets; show the cause.
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`Begleitdienst konnte nicht gestartet werden: ${detail}`);
+    process.exitCode = 1;
+  });
 }
