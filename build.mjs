@@ -5,7 +5,7 @@ import { build } from "esbuild";
 rmSync("dist", { recursive: true, force: true });
 cpSync("public", "dist", { recursive: true });
 await build({
-  entryPoints: { background: "src/background.ts", content: "src/content/overlay.ts" },
+  entryPoints: { background: "src/background.ts", content: "src/content/overlay.ts", options: "src/options.ts" },
   bundle: true,
   format: "iife",
   target: "chrome116",

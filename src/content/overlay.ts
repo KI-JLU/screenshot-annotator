@@ -4,13 +4,15 @@
  * - Shadow DOM host fixed over the viewport at max z-index (top layer via popover when available),
  *   so the page layout is untouched and page events are swallowed.
  * - Click selects the element under the pointer; dragging selects a free area. Esc cancels.
- * - Then a comment box opens. Enter copies, Shift+Enter adds a line.
+ * - Then a comment box opens. Enter copies, Shift+Enter adds a line, Ctrl/Cmd+Enter starts a
+ *   T3 Code thread in the chosen project (when the extension is paired with T3 Code).
  * - Before the screenshot the overlay is removed and two animation frames pass, so the capture
  *   shows the page only. The image is rendered here and written to the clipboard.
  */
 import { annotationText, renderAnnotation, type Annotation } from "../lib/annotate.ts";
 import { rectFromPoints, type Point, type Rect } from "../lib/geometry.ts";
-import type { CaptureResponse, ContentToWorker, WorkerToContent } from "../lib/messages.ts";
+import type { CaptureResponse, ContentToWorker, T3ProjectsResponse, T3SendResponse, WorkerToContent } from "../lib/messages.ts";
+import { threadTitle } from "../lib/t3.ts";
 
 declare global {
   interface Window {
@@ -67,11 +69,23 @@ function nextFrames(n: number): Promise<void> {
   });
 }
 
+function toWorker<R>(msg: ContentToWorker): Promise<R> {
+  return chrome.runtime.sendMessage(msg) as Promise<R>;
+}
+
 async function captureViewport(): Promise<string> {
-  const msg: ContentToWorker = { type: "capture" };
-  const res = (await chrome.runtime.sendMessage(msg)) as CaptureResponse;
+  const res = await toWorker<CaptureResponse>({ type: "capture" });
   if (!res.ok) throw new Error(`Screenshot failed: ${res.error}`);
   return res.dataUrl;
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the image."));
+    reader.readAsDataURL(blob);
+  });
 }
 
 async function copyToClipboard(png: Promise<Blob>, text: string): Promise<void> {
@@ -113,11 +127,20 @@ textarea {
 }
 textarea:focus { outline: 2px solid #e11d2e; outline-offset: -1px; }
 .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.t3 { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb; }
+.t3 select {
+  flex: 1; min-width: 0; padding: 4px 6px; border: 1px solid #d1d5db; border-radius: 4px;
+  font: 13px/1.4 system-ui, sans-serif; color: #111827; background: #fff;
+}
+.t3 select[hidden] { display: none; }
+.t3-status { margin-top: 4px; font-size: 12px; color: #6b7280; }
+.t3-status:empty { display: none; }
 button {
   padding: 4px 10px; border: 1px solid #d1d5db; border-radius: 4px; cursor: pointer;
   font: 13px/1.4 system-ui, sans-serif; color: #111827; background: #fff;
 }
 button.primary { border-color: #e11d2e; color: #fff; background: #e11d2e; }
+button:disabled { opacity: 0.5; cursor: default; }
 .toast {
   display: flex; flex-direction: column; gap: 6px; max-width: 360px; padding: 10px 12px;
   border-radius: 8px; font: 13px/1.4 system-ui, sans-serif; color: #fff;
@@ -186,7 +209,12 @@ function createOverlay(): { start(): void } {
     hint: HTMLElement;
     panel: HTMLElement;
     textarea: HTMLTextAreaElement;
+    root: ShadowRoot;
+    project: HTMLSelectElement;
+    send: HTMLButtonElement;
+    t3Status: HTMLElement;
   } | null = null;
+  let t3: T3ProjectsResponse | null = null;
   let toastHost: HTMLElement | null = null;
   let toastTimer: number | undefined;
   let toastImageUrl: string | undefined;
@@ -292,8 +320,13 @@ function createOverlay(): { start(): void } {
     }
     if (inPanel(e)) {
       if (e.type === "keydown" && e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        submit();
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          if (t3?.state === "ok") sendToT3();
+        } else if (parts?.root.activeElement === parts?.textarea) {
+          e.preventDefault();
+          copy();
+        }
       }
       // Keep typing away from page shortcuts; the default action (text input) still happens.
       e.stopImmediatePropagation();
@@ -334,6 +367,36 @@ function createOverlay(): { start(): void } {
     showBox(rectOf(sel));
     placePanel();
     parts.textarea.focus();
+    void loadT3();
+  };
+
+  /** Fills the project picker, or turns the button into a link to the options page. */
+  const loadT3 = async () => {
+    if (!parts) return;
+    const { project, send, t3Status } = parts;
+    t3 = null;
+    project.hidden = true;
+    send.disabled = true;
+    send.textContent = "Send to T3 Code";
+    t3Status.textContent = "";
+    const res = await toWorker<T3ProjectsResponse>({ type: "t3/projects", host: location.host }).catch(
+      (e: unknown): T3ProjectsResponse => ({ state: "error", error: String(e) }),
+    );
+    if (!parts || parts.project !== project) return; // closed or restarted meanwhile
+    t3 = res;
+    send.disabled = false;
+    if (res.state !== "ok") {
+      send.textContent = "Set up T3 Code…";
+      if (res.state === "error") t3Status.textContent = res.error;
+      return;
+    }
+    project.replaceChildren(...res.projects.map((p) => Object.assign(el("option", "", p.title), { value: p.id })));
+    if (res.selectedId) project.value = res.selectedId;
+    project.hidden = false;
+    send.disabled = res.projects.length === 0;
+    if (!res.projects.length) t3Status.textContent = "T3 Code has no projects yet.";
+    parts.hint.textContent = "Add a comment · Enter copies · Ctrl+Enter sends to T3 Code · Esc cancels";
+    placePanel();
   };
 
   const BLOCKED = ["mousedown", "mouseup", "mousemove", "click", "dblclick", "contextmenu", "auxclick", "touchstart", "touchmove", "touchend", "wheel"];
@@ -389,8 +452,9 @@ function createOverlay(): { start(): void } {
     if (!sticky) toastTimer = window.setTimeout(hideToast, TOAST_MS);
   };
 
-  const submit = () => {
-    if (!parts || !selection) return;
+  /** Reads the selection and comment, then removes the overlay. */
+  const takeAnnotation = (): Annotation | null => {
+    if (!parts || !selection) return null;
     const annotation: Annotation = {
       kind: selection.kind,
       rect: rectOf(selection),
@@ -400,11 +464,19 @@ function createOverlay(): { start(): void } {
       ...(selection.kind === "element" ? { element: selection.description } : {}),
     };
     teardown();
-    const png = (async () => {
-      // Let the page repaint without the overlay before the worker takes the screenshot.
-      await nextFrames(2);
-      return renderAnnotation(await captureViewport(), annotation);
-    })();
+    return annotation;
+  };
+
+  const screenshot = async (annotation: Annotation): Promise<Blob> => {
+    // Let the page repaint without the overlay before the worker takes the screenshot.
+    await nextFrames(2);
+    return renderAnnotation(await captureViewport(), annotation);
+  };
+
+  const copy = () => {
+    const annotation = takeAnnotation();
+    if (!annotation) return;
+    const png = screenshot(annotation);
     copyToClipboard(png, annotationText(annotation)).then(
       async () => showToast("Copied. Paste it into Claude Code or Codex.", await png),
       async (e: unknown) => {
@@ -414,6 +486,36 @@ function createOverlay(): { start(): void } {
         else showToast(reason, undefined, true);
       },
     );
+  };
+
+  const sendToT3 = () => {
+    if (!parts || t3?.state !== "ok") return;
+    const projectId = parts.project.value;
+    const projectTitle = parts.project.selectedOptions[0]?.textContent ?? "T3 Code";
+    const annotation = takeAnnotation();
+    if (!annotation || !projectId) return;
+    void (async () => {
+      let png: Blob | undefined;
+      try {
+        png = await screenshot(annotation);
+        showToast(`Sending to ${projectTitle}…`, undefined, true);
+        const res = await toWorker<T3SendResponse>({
+          type: "t3/send",
+          host: location.host,
+          projectId,
+          title: threadTitle(annotation.comment, annotation.url),
+          text: annotationText(annotation),
+          imageDataUrl: await blobToDataUrl(png),
+          imageBytes: png.size,
+        });
+        if (!res.ok) throw new Error(res.error);
+        showToast(`Started a T3 Code thread in ${projectTitle}.`, png);
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        if (png) showToast(`Could not start the thread: ${reason} Right-click the image → Copy image to paste it yourself.`, png, true);
+        else showToast(reason, undefined, true);
+      }
+    })();
   };
 
   return {
@@ -438,17 +540,28 @@ function createOverlay(): { start(): void } {
       textarea.placeholder = "What should change here?";
       textarea.setAttribute("aria-label", "Comment");
       const cancel = el("button", "", "Cancel");
-      const copy = el("button", "primary", "Copy");
+      const copyButton = el("button", "primary", "Copy");
       cancel.addEventListener("click", teardown);
-      copy.addEventListener("click", submit);
+      copyButton.addEventListener("click", copy);
       const actions = el("div", "actions");
-      actions.append(cancel, copy);
-      panel.append(textarea, actions);
+      actions.append(cancel, copyButton);
+      const project = el("select");
+      project.setAttribute("aria-label", "T3 Code project");
+      const send = el("button", "", "Send to T3 Code");
+      send.addEventListener("click", () => {
+        if (t3?.state === "ok") sendToT3();
+        else void toWorker({ type: "t3/setup" }).catch(() => undefined);
+      });
+      const t3Row = el("div", "t3");
+      t3Row.append(project, send);
+      const t3Status = el("div", "t3-status");
+      t3Status.setAttribute("role", "status");
+      panel.append(textarea, actions, t3Row, t3Status);
       const box = el("div", "box");
       const tag = el("div", "tag");
       layer.append(box, tag, hint, panel);
       mounted.root.append(layer);
-      parts = { layer, box, tag, hint, panel, textarea };
+      parts = { layer, box, tag, hint, panel, textarea, root: mounted.root, project, send, t3Status };
       phase = "select";
       listen(true);
     },

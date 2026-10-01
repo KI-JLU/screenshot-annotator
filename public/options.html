@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Screenshot Annotator options</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; color: #111827; margin: 16px; min-width: 420px; max-width: 560px; }
+      h1 { font-size: 16px; margin: 0 0 4px; }
+      p { margin: 0 0 12px; color: #4b5563; }
+      label { display: block; margin: 12px 0 4px; font-weight: 600; }
+      input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 4px; font: inherit; }
+      .actions { display: flex; gap: 8px; margin-top: 12px; }
+      button { padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+      button.primary { border-color: #e11d2e; background: #e11d2e; color: #fff; }
+      button[hidden] { display: none; }
+      #status { padding: 8px 10px; border-radius: 6px; background: #f3f4f6; }
+      #status.ok { background: #ecfdf5; color: #065f46; }
+      #status.error { background: #fef2f2; color: #991b1b; }
+    </style>
+  </head>
+  <body>
+    <h1>Send to T3 Code</h1>
+    <p>
+      In T3 Code open Settings → Connections → <strong>Create link</strong>, copy the pairing link (or the code) and paste
+      it here. The extension can then list your projects and start threads; nothing else.
+    </p>
+    <div id="status" role="status">Checking…</div>
+    <form id="form">
+      <label for="server">T3 Code server</label>
+      <input id="server" type="url" required placeholder="http://127.0.0.1:3773" />
+      <label for="pairing">Pairing link or code</label>
+      <input id="pairing" autocomplete="off" spellcheck="false" placeholder="http://127.0.0.1:3773/pair#token=…" />
+      <div class="actions">
+        <button class="primary" type="submit">Connect</button>
+        <button id="disconnect" type="button" hidden>Disconnect</button>
+      </div>
+    </form>
+    <script src="options.js"></script>
+  </body>
+</html>
