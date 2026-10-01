@@ -1,0 +1,52 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release upload
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Package
+        id: package
+        run: |
+          version=$(node -p 'require("./public/manifest.json").version')
+          if [ "$GITHUB_EVENT_NAME" = release ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [ "$tag" != "$version" ]; then
+              echo "::error::Release tag $GITHUB_REF_NAME does not match manifest version $version"
+              exit 1
+            fi
+            name="screenshot-annotator-$version"
+          else
+            name="screenshot-annotator-$version-${GITHUB_SHA::7}"
+          fi
+          # Manifest at the zip root, as "Load unpacked" and the Chrome Web Store expect.
+          (cd dist && zip -qr "../$name.zip" .)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" "${{ steps.package.outputs.name }}.zip" --clobber

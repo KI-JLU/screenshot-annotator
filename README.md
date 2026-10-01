@@ -38,3 +38,9 @@ npm test          # vitest: crop geometry and text wrapping
 npm run typecheck
 npm run build
 ```
+
+## CI and releases
+
+Every push to `main` runs typecheck, tests and build, and uploads the built extension as a workflow artifact (`screenshot-annotator-<version>-<sha>`).
+
+To release, bump `version` in `public/manifest.json`, then publish a GitHub release tagged `v<version>` (for example `v0.2.0`). The workflow attaches `screenshot-annotator-<version>.zip` to it, and fails if the tag and manifest version differ.
